@@ -15,6 +15,15 @@ import { z } from 'zod';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
+const VERSION = '0.1.0';
+// Self-identify so Skillselion can distinguish MCP traffic from website (UI)
+// traffic - the UI calls the same endpoint from a browser (Origin: skillselion.com),
+// this client tags itself explicitly. Lets us monitor + rate-limit each source.
+const CLIENT_HEADERS = {
+  accept: 'application/json',
+  'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
+  'x-skillselion-client': 'mcp',
+};
 const TYPE_BASE = { skill: 'skills', mcp: 'mcp/tool', marketplace: 'marketplace', plugin: 'plugin', workflow: 'workflow' };
 const LEGACY_ID = /^[\w.-]+$/;
 
@@ -79,7 +88,7 @@ function fmt(row) {
 
 async function fetchListings(params) {
   const qs = new URLSearchParams(params).toString();
-  const res = await fetch(`${API}/listings?${qs}`, { headers: { accept: 'application/json' } });
+  const res = await fetch(`${API}/listings?${qs}`, { headers: CLIENT_HEADERS });
   if (!res.ok) throw new Error(`Skillselion API ${res.status}`);
   const data = await res.json();
   const rows = Array.isArray(data) ? data : (data.data || data.items || []);
