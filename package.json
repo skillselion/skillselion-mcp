@@ -1,7 +1,7 @@
 {
   "name": "skillselion-mcp",
   "version": "0.5.3",
-  "description": "MCP server to search Skillselion's curated directory of Claude Code agent skills, MCP servers and plugin marketplaces, ranked by installs and GitHub stars.",
+  "description": "MCP server that gives your coding agent on-demand access to thousands of community-vetted Claude Code skills - search Skillselion and load_skill a real SKILL.md (plus its scripts/refs) mid-task. Ranked by installs + GitHub stars. Works with Claude Code, Cursor, Codex & any MCP client.",
   "type": "module",
   "bin": {
     "skillselion-mcp": "./index.js"
@@ -17,19 +17,34 @@
   "keywords": [
     "mcp",
     "model-context-protocol",
+    "mcp-server",
     "claude",
     "claude-code",
+    "anthropic",
+    "ai",
+    "ai-agents",
+    "coding-agent",
     "agent-skills",
     "skills",
+    "skill",
     "directory",
+    "cursor",
+    "codex",
     "skillselion"
   ],
   "homepage": "https://skillselion.com",
+  "bugs": {
+    "url": "https://github.com/skillselion/skillselion-mcp/issues"
+  },
+  "author": "Skillselion (https://skillselion.com)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/skillselion/skillselion-mcp.git"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18"
   },

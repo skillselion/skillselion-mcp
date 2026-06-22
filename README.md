@@ -1,9 +1,10 @@
 <p align="center">
-  <img src="./assets/banner.svg" alt="Skillselion MCP" width="100%">
+  <img src="https://raw.githubusercontent.com/skillselion/skillselion-mcp/master/assets/banner.svg" alt="Skillselion MCP" width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/skillselion/skillselion-mcp/releases"><img src="https://img.shields.io/github/v/release/skillselion/skillselion-mcp?style=flat-square&color=d8455f&label=release&sort=semver" alt="Release"></a>
+  <a href="https://www.npmjs.com/package/skillselion-mcp"><img src="https://img.shields.io/npm/v/skillselion-mcp?style=flat-square&color=d8455f&label=npm" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/skillselion-mcp"><img src="https://img.shields.io/npm/dm/skillselion-mcp?style=flat-square&color=5b7fb0&label=downloads" alt="npm downloads"></a>
   <a href="https://github.com/skillselion/skillselion-mcp/blob/master/LICENSE"><img src="https://img.shields.io/github/license/skillselion/skillselion-mcp?style=flat-square&color=1a1a1a" alt="License"></a>
   <img src="https://img.shields.io/badge/MCP-server-5b7fb0?style=flat-square" alt="MCP server">
   <img src="https://img.shields.io/badge/node-%E2%89%A518-6fae7d?style=flat-square" alt="Node >= 18">
@@ -28,7 +29,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/demo.gif" alt="Skillselion MCP: search the live catalog, then load_skill materializes the real skill into a temp folder" width="92%">
+  <img src="https://raw.githubusercontent.com/skillselion/skillselion-mcp/master/assets/demo.gif" alt="Skillselion MCP: search the live catalog, then load_skill materializes the real skill into a temp folder" width="92%">
 </p>
 
 <p align="center"><sub>Real run against the live catalog: <code>search_skillselion</code> → <code>load_skill</code> pulls the skill's real <code>SKILL.md</code> + bundled files into a temp folder → your agent follows it like an installed skill.</sub></p>
@@ -56,10 +57,10 @@ Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin 
 ### Claude Code
 
 ```bash
-claude mcp add skillselion --scope user -- npx -y github:skillselion/skillselion-mcp
+claude mcp add skillselion --scope user -- npx -y skillselion-mcp
 ```
 
-`--scope user` makes it available in **all** your projects (drop it to add to the current project only).
+`--scope user` makes it available in **all** your projects (drop it to add to the current project only). Prefer the bleeding edge? Swap `skillselion-mcp` for `github:skillselion/skillselion-mcp` to run straight from `master`.
 
 ### Claude Desktop / Cursor / Codex
 
@@ -70,13 +71,13 @@ Add this to your MCP config:
   "mcpServers": {
     "skillselion": {
       "command": "npx",
-      "args": ["-y", "github:skillselion/skillselion-mcp"]
+      "args": ["-y", "skillselion-mcp"]
     }
   }
 }
 ```
 
-> Runs straight from this repo — **no build step**. Once published to npm, plain `skillselion-mcp` (without the `github:` prefix) will work too.
+> **No build step, no auth, no config.** `npx` fetches a single ~30 KB file. Want full multi-file skill loads without GitHub's 60-req/hr cap? Add a `GITHUB_TOKEN` to the server's `env` (raises it to 5000/hr — optional, read-only). See [Troubleshooting](#-troubleshooting).
 
 ## 🪄 Skill autopilot (one-command setup)
 
@@ -84,11 +85,11 @@ Want your agent skill-aware **automatically**, every session?
 
 ```bash
 # Interactive — pick your packs (humans, in a terminal)
-npx -y github:skillselion/skillselion-mcp setup
+npx -y skillselion-mcp setup
 
 # Non-interactive — for agents / CI / scripts (never prompts)
-npx -y github:skillselion/skillselion-mcp setup --yes
-npx -y github:skillselion/skillselion-mcp setup --packs frontend,ai-agents --per-pack 5 --auto --yes
+npx -y skillselion-mcp setup --yes
+npx -y skillselion-mcp setup --packs frontend,ai-agents --per-pack 5 --auto --yes
 ```
 
 It **registers the MCP globally** (`claude mcp add --scope user`) and installs a Claude Code **`SessionStart` hook** that primes every session with relevant skills and tells the agent to **`load_skill`** the right one the moment a task matches — so skills load **dynamically, on demand**, without you remembering the tools exist.
@@ -149,8 +150,16 @@ locations + a login shell, but a non-standard install can still miss.
 
 ```bash
 npm install
-node index.js   # speaks MCP over stdio
+npm test         # smoke: server starts + exposes the 3 tools
+npm run test:live  # hits the live catalog + GitHub (set GITHUB_TOKEN to avoid rate limits)
+node index.js    # speaks MCP over stdio
 ```
+
+## ⭐ Like it?
+
+- **[Star this repo](https://github.com/skillselion/skillselion-mcp)** — it helps other builders find it.
+- **Browse the full catalog at [skillselion.com](https://skillselion.com)** — search thousands of skills, MCPs & marketplaces, ranked by real installs.
+- Found a great skill that's missing, or hit a bug? **[Open an issue](https://github.com/skillselion/skillselion-mcp/issues)** — PRs welcome.
 
 ## 📄 License
 
