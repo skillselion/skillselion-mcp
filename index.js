@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.5.2';
+const VERSION = '0.5.3';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -117,7 +117,22 @@ const STOP = new Set(['build', 'building', 'built', 'create', 'creating', 'make'
   // Claude model names are noise as match terms - they appear in many skills'
   // text ("works with Claude Haiku/Sonnet/Opus") and otherwise collide with
   // unrelated user words (e.g. a "haiku" poem task matching a Bedrock skill).
-  'claude', 'haiku', 'sonnet', 'opus']);
+  'claude', 'haiku', 'sonnet', 'opus',
+  // Generic code/English words that appear in almost any skill's prose, so they
+  // produce spurious "matches" (e.g. a task pasting `return foo` matching a skill
+  // whose highlight says "returns results"). Domain nouns - not these - decide
+  // relevance, so dropping them sharpens both ranking and the relevance floor.
+  'function', 'functions', 'variable', 'variables', 'return', 'returns', 'value',
+  'values', 'let', 'const', 'var', 'snippet', 'edited', 'simple', 'number', 'numbers',
+  // Generic action verbs/adjectives. Dropped mainly so the broad-pool ANCHOR
+  // (first significant term) is the DOMAIN noun ("react"), not a verb ("optimize
+  // slow react ..." -> anchor on react, not optimize) - otherwise the candidate
+  // pool fills with unrelated skills and the right one never competes.
+  'optimize', 'optimizing', 'slow', 'fast', 'faster', 'improve', 'improving',
+  'speed', 'fix', 'fixing', 'across', 'into', 'new', 'one', 'exposes', 'follow',
+  // Short filler words that must never become the broad-pool anchor (e.g. "set
+  // UP a stripe flow" -> anchoring on "up" floods the pool with junk).
+  'up', 'go', 'ok', 'comprehensive', 'application', 'applications', 'app', 'apps']);
 function queryVariants(q) {
   const toks = String(q).toLowerCase().split(/[^a-z0-9+#.]+/i).filter(Boolean);
   const sig = toks.filter((t) => !STOP.has(t));
@@ -135,8 +150,16 @@ function queryVariants(q) {
  *  progressively broader variants, returning the first non-empty hit. */
 async function smartFetch(query, params) {
   for (const v of queryVariants(query)) {
-    const rows = await fetchListings({ ...params, q: v });
-    if (rows.length) return { rows, matched: v };
+    // The catalog API rejects an over-long `q` (HTTP 400). Agents pass verbose
+    // natural-language queries, so skip any variant past the limit - the broader
+    // variants (significant words, leading/trailing pair, longest token) are
+    // shorter and resolve fine. Also swallow per-variant errors so one bad/slow
+    // variant never aborts the whole search; just fall through to the next.
+    if (v.length > 120) continue;
+    try {
+      const rows = await fetchListings({ ...params, q: v });
+      if (rows.length) return { rows, matched: v };
+    } catch { /* try the next, broader variant */ }
   }
   return { rows: [], matched: query };
 }
@@ -163,6 +186,18 @@ function recordDemand(sig) {
 // "modelscope.cn", and can't be pulled).
 const isLoadableRepo = (repo) => /^[\w.-]+\/[\w.-]+$/.test(String(repo || ''));
 
+// Optional GitHub auth for the skill-materializing fetches. An unauthenticated
+// client gets 60 requests/hr (a few load_skills can exhaust it -> the tree API
+// 403s and we fall back to raw SKILL.md only). If the environment has a token,
+// use it to raise the limit to 5000/hr so heavy use keeps materializing full,
+// multi-file skills. Read-only, never required.
+const ghHeaders = (extra = {}) => {
+  const h = { 'user-agent': CLIENT_HEADERS['user-agent'], ...extra };
+  const tok = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  if (tok) h.authorization = `Bearer ${tok}`;
+  return h;
+};
+
 const sigTerms = (s) => String(s || '').toLowerCase().split(/[^a-z0-9+#.]+/i).filter((t) => t.length > 1 && !STOP.has(t));
 
 /** Rank candidates by relevance to the task (query) + the agent's stated context
@@ -173,24 +208,31 @@ function rankCandidates(rows, query, context, repoCats) {
   const qTerms = sigTerms(query);
   const cTerms = sigTerms(context).slice(0, 16);
   return rows.map((r) => {
-    // Rank over the richest signal the catalog returns: name/repo/tool +
-    // editorial `highlights` (specific, populated for every row) + both
-    // summary AND description + category. More precise term surface than the
-    // old summary-only haystack -> sharper ranking and a more accurate floor.
     const hl = Array.isArray(r.highlights) ? r.highlights.join(' ') : (r.highlights || '');
-    const hay = `${r.name || ''} ${r.repo || ''} ${r.tool || ''} ${hl} ${r.summary || ''} ${r.description || ''} ${r.category || ''}`.toLowerCase();
+    // STRONG fields = the curated, topical signal: name + tool + editorial
+    // `highlights` (specific, populated for every row) + category. A query hit
+    // HERE is a real topical match. WEAK fields = repo owner/name + free-text
+    // summary/description: noisy (owner slugs, prose) so they help RANKING but
+    // do NOT, on their own, justify a load. The floor keys off the strong hit.
+    const strong = `${r.name || ''} ${r.tool || ''} ${hl} ${r.category || ''}`.toLowerCase();
+    const weak = `${r.repo || ''} ${r.summary || ''} ${r.description || ''}`.toLowerCase();
+    const hay = strong + ' ' + weak;
     const qHit = qTerms.filter((t) => hay.includes(t));
+    const qStrong = qTerms.filter((t) => strong.includes(t)).length;
     const cHit = cTerms.filter((t) => hay.includes(t)).length;
+    const cStrong = cTerms.filter((t) => strong.includes(t)).length;
     const repoBoost = repoCats.includes(r.category) ? 1 : 0;
     const pop = Math.log10((r.installs || 0) + (r.stars || 0) + 1);
-    const score = qHit.length * 3 + cHit * 1 + repoBoost * 2 + pop;
+    // A strong (curated-field) query hit outweighs a weak one, so a topically
+    // on-point skill outranks a merely-popular one that collides in prose.
+    const score = qStrong * 4 + (qHit.length - qStrong) * 1 + cHit * 1 + repoBoost * 2 + pop;
     const why = [
       qHit.length ? `matches ${qHit.slice(0, 3).join('/')}` : null,
       r.category,
       r.installs ? `${r.installs.toLocaleString()} installs` : (r.stars ? `★${r.stars}` : null),
       repoBoost ? 'fits this repo' : null,
     ].filter(Boolean).join(' · ');
-    return { row: r, score, why, qHitLen: qHit.length, cHit };
+    return { row: r, score, why, qHitLen: qHit.length, cHit, qStrong, cStrong };
   }).sort((a, b) => b.score - a.score);
 }
 
@@ -219,7 +261,7 @@ async function fetchSkillContent(repo, slug) {
     for (const p of paths) {
       const url = `https://raw.githubusercontent.com/${repo}/${branch}/${p}`;
       try {
-        const res = await fetch(url, { headers: { 'user-agent': CLIENT_HEADERS['user-agent'] } });
+        const res = await fetch(url, { headers: ghHeaders() });
         if (res.ok) {
           const text = await res.text();
           if (text.trim().length > 30) return { url, content: text };
@@ -233,7 +275,7 @@ async function fetchSkillContent(repo, slug) {
 async function ghTree(repo, branch) {
   try {
     const res = await fetch(`https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`, {
-      headers: { 'user-agent': CLIENT_HEADERS['user-agent'], accept: 'application/vnd.github+json' },
+      headers: ghHeaders({ accept: 'application/vnd.github+json' }),
     });
     if (!res.ok) return null;
     const j = await res.json();
@@ -268,7 +310,7 @@ async function loadFullSkill(repo, slug) {
       const rel = skillDir ? f.path.slice(prefix.length) : f.path;
       try {
         const raw = await fetch(`https://raw.githubusercontent.com/${repo}/${branch}/${f.path}`, {
-          headers: { 'user-agent': CLIENT_HEADERS['user-agent'] },
+          headers: ghHeaders(),
         });
         if (!raw.ok) continue;
         const buf = Buffer.from(await raw.arrayBuffer());
@@ -320,7 +362,7 @@ async function runServer() {
     async ({ id, query, context }) => {
       if (!context || !String(context).trim()) return { content: [{ type: 'text', text: 'load_skill needs `context` — tell me what you are doing + your stack + constraints (e.g. "Next.js marketing page, no new deps, role-based locators"). It makes the match accurate, fits the skill to your repo, and keeps the load deliberate.' }] };
       const repoCats = (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
-      let row, alternates = [], topScore;
+      let row, alternates = [], topScore, picks;
       if (!id) {
         if (!query) return { content: [{ type: 'text', text: 'Provide a `query` (what you need) or an exact `id`. (`context` is also required.)' }] };
         // Widen the candidate pool (specific query + broadest term) so a canonical
@@ -328,18 +370,24 @@ async function runServer() {
         // + the current repo's stack - and surface the runners-up too.
         const broad = sigTerms(query)[0]; // domain anchor (first significant word, e.g. "mcp"), NOT a generic long token like "server" that floods the pool
         const pools = await Promise.all([
-          smartFetch(query, { type: 'skill', limit: '10' }).then((r) => r.rows),
-          broad && broad !== query ? fetchListings({ type: 'skill', q: broad, limit: '10' }) : Promise.resolve([]),
+          smartFetch(query, { type: 'skill', limit: '10' }).then((r) => r.rows).catch(() => []),
+          broad && broad !== query ? fetchListings({ type: 'skill', q: broad, limit: '10' }).catch(() => []) : Promise.resolve([]),
         ]);
         const seen = new Set();
         const cand = pools.flat().filter((r) => r && !seen.has(r.id) && seen.add(r.id));
         const loadable = cand.filter((r) => isLoadableRepo(r.repo));
         const ranked = rankCandidates(loadable.length ? loadable : cand, query, context, repoCats);
         if (!ranked.length) return { content: [{ type: 'text', text: `No skill matched "${query}". Try search_skillselion with a shorter query, then load_skill by id.` }] };
-        // Relevance floor: if the top candidate shares NO query term (and no
-        // context term) with any skill, it won on popularity alone — loading it
-        // wastes the agent's context. Refuse honestly instead of returning junk.
-        if (ranked[0].qHitLen === 0 && ranked[0].cHit === 0) {
+        // Relevance floor: the top pick must share a real topical term with a
+        // CURATED field (name/tool/highlights/category) - a hit only in the repo
+        // owner slug or free-text prose (e.g. "poem" inside owner "poemswe", or a
+        // generic word like "files"/"pipeline" buried in a description) is too
+        // weak to justify loading. If nothing matches strongly, it won on
+        // popularity/noise alone - refuse honestly instead of returning junk.
+        // Key off the QUERY (the task) only: context is the agent's situation and
+        // is full of generic words ("code", "next.js app") that strong-match
+        // almost anything, so it must not rescue a task with no topical match.
+        if (ranked[0].qStrong === 0) {
           recordDemand({ query, context, matched: false, topScore: ranked[0].score });
           const near = ranked.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
           return { content: [{ type: 'text', text:
@@ -349,38 +397,55 @@ async function runServer() {
         alternates = ranked.slice(1, 3);
         topScore = ranked[0].score;
         id = row.id;
+        picks = ranked.slice(0, 3).map((a) => ({ id: a.row.id, row: a.row, why: a.why }));
       }
-      const m = String(id).match(/^skill:([^#]+)#(.+)$/);
-      const repo = m ? m[1] : row?.repo;
-      const slug = m ? m[2] : '';
-      if (!repo) return { content: [{ type: 'text', text: `Could not resolve a GitHub repo for "${id}".` }] };
+      // The ordered list we'll actually try to materialize: the ranked pick + its
+      // runners-up (query path), or just the one explicit id. A top pick that
+      // can't be fetched (dead repo, odd path) falls through to the next instead
+      // of dead-ending with "Couldn't load".
+      if (!picks) picks = [{ id, row: row || null, why: null }];
 
-      const altNote = alternates.length
-        ? `\n\n## Other candidates (call load_skill with the id to switch)\n${alternates.map((a) => `- \`${a.row.id}\` — ${a.why}`).join('\n')}`
-        : '';
       const depWarn = (deps) => {
         if (!deps.tools.length && !deps.needsSecret) return '';
         const needs = [...deps.tools, deps.needsSecret ? 'an API key/secret' : null].filter(Boolean).join(', ');
         const conflict = /\bno[ -]?(new )?dep|without installing|don'?t add/i.test(context || '');
         return `\n\n⚠ Heads-up — this skill appears to require: ${needs}.${conflict ? ' You flagged no new deps, so it may not fit — consider an alternate above.' : ' If your project can’t add those, skip it or pick an alternate above.'}`;
       };
+      const otherNote = (usedIdx) => {
+        const others = picks.filter((_, i) => i !== usedIdx).filter((p) => p.why);
+        return others.length
+          ? `\n\n## Other candidates (call load_skill with the id to switch)\n${others.map((p) => `- \`${p.id}\` — ${p.why}`).join('\n')}`
+          : '';
+      };
 
-      recordDemand({ query: query || slug || repo, context, matched: true, skillId: id, topScore });
-      const loaded = await loadFullSkill(repo, slug);
-      if (loaded) {
-        const filesNote = loaded.manifest.length
-          ? `## Bundled files (materialized to ${loaded.tmpDir})\n${loaded.manifest.map((f) => '- ' + f).join('\n')}\n\nRead or run these from that folder exactly as the SKILL.md directs (e.g. \`python ${loaded.tmpDir}/scripts/<name>.py\`, or read \`${loaded.tmpDir}/references/<name>.md\`).`
-          : '## Bundled files: none - this skill is just its SKILL.md.';
-        const body = loaded.skillMd.length > 14000 ? loaded.skillMd.slice(0, 14000) + `\n\n…(truncated - full file at ${loaded.tmpDir}/SKILL.md)` : loaded.skillMd;
-        return { content: [{ type: 'text', text:
-          `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${loaded.tmpDir}\n\nFOLLOW these instructions for the current task, like an installed skill (verify against your project's real constraints):\n\n## SKILL.md\n${body}\n\n${filesNote}${depWarn(detectDeps(loaded.skillMd))}${altNote}` }] };
+      recordDemand({ query: query || picks[0].id, context, matched: true, skillId: picks[0].id, topScore });
+      let lastRepo = '', lastSlug = '';
+      for (let k = 0; k < picks.length; k++) {
+        const cid = picks[k].id;
+        const mm = String(cid).match(/^skill:([^#]+)#(.+)$/);
+        const repo = mm ? mm[1] : picks[k].row?.repo;
+        const slug = mm ? mm[2] : '';
+        if (!repo) continue;
+        lastRepo = repo; lastSlug = slug;
+        const loaded = await loadFullSkill(repo, slug);
+        if (loaded) {
+          const filesNote = loaded.manifest.length
+            ? `## Bundled files (materialized to ${loaded.tmpDir})\n${loaded.manifest.map((f) => '- ' + f).join('\n')}\n\nRead or run these from that folder exactly as the SKILL.md directs (e.g. \`python ${loaded.tmpDir}/scripts/<name>.py\`, or read \`${loaded.tmpDir}/references/<name>.md\`).`
+            : '## Bundled files: none - this skill is just its SKILL.md.';
+          const body = loaded.skillMd.length > 14000 ? loaded.skillMd.slice(0, 14000) + `\n\n…(truncated - full file at ${loaded.tmpDir}/SKILL.md)` : loaded.skillMd;
+          return { content: [{ type: 'text', text:
+            `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${loaded.tmpDir}\n\nFOLLOW these instructions for the current task, like an installed skill (verify against your project's real constraints):\n\n## SKILL.md\n${body}\n\n${filesNote}${depWarn(detectDeps(loaded.skillMd))}${otherNote(k)}` }] };
+        }
+        // fallback: just the SKILL.md text (e.g. GitHub tree API rate-limited)
+        const got = await fetchSkillContent(repo, slug);
+        if (got) {
+          const body = got.content.length > 12000 ? got.content.slice(0, 12000) + '\n\n…(truncated - see ' + got.url + ')' : got.content;
+          return { content: [{ type: 'text', text: `# Skill: ${slug || repo}\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}${depWarn(detectDeps(got.content))}${otherNote(k)}` }] };
+        }
+        // else: this candidate couldn't be materialized - try the next one
       }
-
-      // fallback: just the SKILL.md text (e.g. GitHub tree API rate-limited)
-      const got = await fetchSkillContent(repo, slug);
-      if (!got) return { content: [{ type: 'text', text: `Couldn't load "${id}". Install it instead: npx skills add https://github.com/${repo}${slug ? ` --skill ${slug}` : ''}` }] };
-      const body = got.content.length > 12000 ? got.content.slice(0, 12000) + '\n\n…(truncated - see ' + got.url + ')' : got.content;
-      return { content: [{ type: 'text', text: `# Skill: ${slug || repo}\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}${depWarn(detectDeps(got.content))}${altNote}` }] };
+      if (!lastRepo) return { content: [{ type: 'text', text: `Could not resolve a GitHub repo for "${id}".` }] };
+      return { content: [{ type: 'text', text: `Couldn't load "${id}". Install it instead: npx skills add https://github.com/${lastRepo}${lastSlug ? ` --skill ${lastSlug}` : ''}` }] };
     },
   );
 
