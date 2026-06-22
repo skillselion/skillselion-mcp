@@ -22,7 +22,7 @@ catalog API. No auth, no writes, no secrets, no telemetry.
 ### Claude Code
 
 ```bash
-claude mcp add skillselion -- npx -y skillselion-mcp
+claude mcp add skillselion -- npx -y github:skillselion/skillselion-mcp
 ```
 
 ### Claude Desktop / Cursor (config)
@@ -32,17 +32,14 @@ claude mcp add skillselion -- npx -y skillselion-mcp
   "mcpServers": {
     "skillselion": {
       "command": "npx",
-      "args": ["-y", "skillselion-mcp"]
+      "args": ["-y", "github:skillselion/skillselion-mcp"]
     }
   }
 }
 ```
 
-Or run straight from source:
-
-```bash
-npx -y github:skillselion/skillselion-mcp
-```
+> Once published to npm, `skillselion-mcp` (without the `github:` prefix) will
+> work too. For now the `github:` form runs straight from this repo - no build step.
 
 ## Example
 
