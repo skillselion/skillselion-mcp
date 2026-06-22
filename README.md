@@ -3,11 +3,17 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/skillselion/skillselion-mcp/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-d8455f?style=flat-square" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/MCP-server-1a1a1a?style=flat-square" alt="MCP server">
+  <a href="https://github.com/skillselion/skillselion-mcp/releases"><img src="https://img.shields.io/github/v/release/skillselion/skillselion-mcp?style=flat-square&color=d8455f&label=release&sort=semver" alt="Release"></a>
+  <a href="https://github.com/skillselion/skillselion-mcp/blob/master/LICENSE"><img src="https://img.shields.io/github/license/skillselion/skillselion-mcp?style=flat-square&color=1a1a1a" alt="License"></a>
+  <img src="https://img.shields.io/badge/MCP-server-5b7fb0?style=flat-square" alt="MCP server">
   <img src="https://img.shields.io/badge/node-%E2%89%A518-6fae7d?style=flat-square" alt="Node >= 18">
-  <img src="https://img.shields.io/badge/read--only-no_auth-5b7fb0?style=flat-square" alt="Read-only, no auth">
-  <a href="https://skillselion.com"><img src="https://img.shields.io/badge/catalog-83k%2B_tools-e0a23a?style=flat-square" alt="83k+ tools"></a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/read--only-no_auth-6fae7d?style=flat-square" alt="Read-only, no auth">
+  <a href="https://skillselion.com"><img src="https://img.shields.io/badge/catalog-thousands_of_tools-e0a23a?style=flat-square" alt="thousands of tools"></a>
+  <a href="https://github.com/skillselion/skillselion-mcp/pulls"><img src="https://img.shields.io/badge/PRs-welcome-d8455f?style=flat-square" alt="PRs welcome"></a>
+  <img src="https://img.shields.io/github/last-commit/skillselion/skillselion-mcp?style=flat-square&color=5b7fb0&label=updated" alt="Last commit">
   <a href="https://github.com/skillselion/skillselion-mcp/stargazers"><img src="https://img.shields.io/github/stars/skillselion/skillselion-mcp?style=flat-square&color=d8455f" alt="Stars"></a>
 </p>
 
@@ -28,7 +34,7 @@
 
 ## ✨ What it does
 
-Skillselion indexes **83,000+** Claude Code skills, MCP servers and plugin marketplaces and ranks them by **real community signal** (installs + GitHub stars). This server puts that directory one tool-call away — so when you need "a trusted Postgres skill" or "the best code-review MCP," your agent finds it and hands you the **paste-ready install command**, without you ever opening a browser.
+Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin marketplaces and ranks them by **real community signal** (installs + GitHub stars). This server puts that directory one tool-call away — so when you need "a trusted Postgres skill" or "the best code-review MCP," your agent finds it and hands you the **paste-ready install command**, without you ever opening a browser.
 
 ## 🔧 Tools
 

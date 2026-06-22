@@ -29,7 +29,7 @@
 
   <!-- wordmark -->
   <text x="230" y="150" font-family="'Space Grotesk',system-ui,Segoe UI,sans-serif" font-size="62" font-weight="700" fill="#1a1a1a" letter-spacing="-1">Skillselion <tspan fill="#d8455f">MCP</tspan></text>
-  <text x="232" y="196" font-family="ui-monospace,'JetBrains Mono',monospace" font-size="23" fill="#5a544c">Search 83,000+ Claude Code skills, MCP servers &amp; marketplaces — from inside your editor.</text>
+  <text x="232" y="196" font-family="ui-monospace,'JetBrains Mono',monospace" font-size="23" fill="#5a544c">Search thousands of Claude Code skills, MCP servers &amp; marketplaces — from your editor.</text>
 
   <!-- compatibility pills -->
   <g font-family="ui-monospace,'JetBrains Mono',monospace" font-size="18" font-weight="600">
