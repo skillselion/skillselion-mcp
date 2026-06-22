@@ -264,7 +264,11 @@ async function loadFullSkill(repo, slug) {
 
 // ---- mode: MCP server -------------------------------------------------------
 async function runServer() {
-  const server = new McpServer({ name: 'skillselion', version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
+  // Append a local-skill gap-targeting line so even no-hook clients are told to
+  // prefer already-installed skills and use load_skill for the long tail.
+  const gl = (() => { try { return gapLine(localSkills()); } catch { return ''; } })();
+  const instructions = gl ? `${SERVER_INSTRUCTIONS}\n\n${gl}` : SERVER_INSTRUCTIONS;
+  const server = new McpServer({ name: 'skillselion', version: VERSION }, { instructions });
 
   server.tool(
     'search_skillselion',
@@ -426,6 +430,29 @@ function repoCategories(cwd) {
   if (here('Dockerfile') || here('docker-compose.yml') || here('terraform') || here('.terraform') || here('k8s')) { cats.add('Cloud & Infrastructure'); cats.add('DevOps & CI/CD'); }
   return [...cats];
 }
+// Detect the skills the user ALREADY has installed locally (plugin skills +
+// user-level ~/.claude/skills). The MCP's edge is the long tail, so priming
+// should tell the agent to prefer these where they fit and reach for load_skill
+// only for what they DON'T cover - which is exactly where Skillselion wins.
+function localSkills() {
+  const names = new Set();
+  const addDir = (dir) => { try { for (const e of readdirSync(dir, { withFileTypes: true })) if (e.isDirectory() && !e.name.startsWith('.')) names.add(e.name); } catch { /* none */ } };
+  addDir(join(homedir(), '.claude', 'skills'));
+  try {
+    const ip = JSON.parse(readFileSync(join(homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8'));
+    for (const [key, arr] of Object.entries(ip.plugins || {})) {
+      names.add(String(key).split('@')[0]); // the plugin name itself
+      for (const inst of (Array.isArray(arr) ? arr : [])) if (inst && inst.installPath) addDir(join(inst.installPath, 'skills'));
+    }
+  } catch { /* none */ }
+  return [...names].filter(Boolean).sort();
+}
+function gapLine(locals) {
+  if (!locals || !locals.length) return '';
+  const shown = locals.slice(0, 30);
+  const more = locals.length > shown.length ? `, +${locals.length - shown.length} more` : '';
+  return `You ALREADY have these skills installed locally - prefer them where they fit and do NOT load_skill for what they cover: ${shown.join(', ')}${more}.\nSkillselion's edge is the LONG TAIL: for any task whose domain is NOT covered by the above, call load_skill instead of improvising from memory.`;
+}
 async function buildPriming(config) {
   let rows = [];
   try {
@@ -455,6 +482,8 @@ async function buildPriming(config) {
 }
 function primingText(sections) {
   const lines = [...PRIMING_DIRECTIVE, ''];
+  const gl = (() => { try { return gapLine(localSkills()); } catch { return ''; } })();
+  if (gl) lines.push(gl, '');
   if (sections.length) {
     for (const s of sections) { lines.push(s.label + ':'); for (let i = 0; i < s.items.length; i++) lines.push(fmtPrime(s.items[i], i)); lines.push(''); }
   } else {
@@ -681,8 +710,9 @@ async function runSetup() {
   // verbatim via .toString()) - one source of truth, no deps, no PATH surprises.
   log('  2/3  Installing the SessionStart hook…');
   const hookSrc = [
-    `import { readFileSync, existsSync } from 'node:fs';`,
+    `import { readFileSync, existsSync, readdirSync } from 'node:fs';`,
     `import { join } from 'node:path';`,
+    `import { homedir } from 'node:os';`,
     `const API = ${JSON.stringify(API)};`,
     `const CLIENT_HEADERS = ${JSON.stringify({ ...CLIENT_HEADERS, 'user-agent': CLIENT_HEADERS['user-agent'].replace('skillselion-mcp/', 'skillselion-mcp-hook/') })};`,
     `const PACKS = ${JSON.stringify(PACKS)};`,
@@ -692,6 +722,8 @@ async function runSetup() {
     `const PRIMING_FOOTER = ${JSON.stringify(PRIMING_FOOTER)};`,
     fmtPrime.toString(),
     repoCategories.toString(),
+    localSkills.toString(),
+    gapLine.toString(),
     buildPriming.toString(),
     primingText.toString(),
     loadConfig.toString(),
