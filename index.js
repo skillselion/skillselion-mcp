@@ -156,7 +156,12 @@ function rankCandidates(rows, query, context, repoCats) {
   const qTerms = sigTerms(query);
   const cTerms = sigTerms(context).slice(0, 16);
   return rows.map((r) => {
-    const hay = `${r.name || ''} ${r.repo || ''} ${r.summary || r.description || ''} ${r.category || ''}`.toLowerCase();
+    // Rank over the richest signal the catalog returns: name/repo/tool +
+    // editorial `highlights` (specific, populated for every row) + both
+    // summary AND description + category. More precise term surface than the
+    // old summary-only haystack -> sharper ranking and a more accurate floor.
+    const hl = Array.isArray(r.highlights) ? r.highlights.join(' ') : (r.highlights || '');
+    const hay = `${r.name || ''} ${r.repo || ''} ${r.tool || ''} ${hl} ${r.summary || ''} ${r.description || ''} ${r.category || ''}`.toLowerCase();
     const qHit = qTerms.filter((t) => hay.includes(t));
     const cHit = cTerms.filter((t) => hay.includes(t)).length;
     const repoBoost = repoCats.includes(r.category) ? 1 : 0;
