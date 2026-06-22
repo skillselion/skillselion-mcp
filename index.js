@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.5.1';
+const VERSION = '0.5.2';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -658,7 +658,9 @@ async function runSetup() {
   const r = claudeBin
     ? spawnSync(claudeBin, ['mcp', 'add', 'skillselion', '--scope', 'user', '--', 'npx', '-y', 'github:skillselion/skillselion-mcp'], { encoding: 'utf8' })
     : { status: 1 };
+  const rOut = `${r.stdout || ''}${r.stderr || ''}`;
   if (r.status === 0) log('       ✓ registered (scope: user — available in all projects)');
+  else if (/already (exists|configured|registered)/i.test(rOut)) log('       ✓ already registered (left as-is)');
   else log('       ! could not auto-register — run this yourself:\n         claude mcp add skillselion --scope user -- npx -y github:skillselion/skillselion-mcp');
 
   // 2) write the self-contained SessionStart hook. It reads ~/.skillselion/
