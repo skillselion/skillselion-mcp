@@ -39,9 +39,9 @@ const CLIENT_HEADERS = {
 const SERVER_INSTRUCTIONS = [
   'Skillselion is a directory of thousands of community-vetted Claude Code skills - each a real SKILL.md plus bundled scripts/references, ranked by install count.',
   '',
-  'Recommended workflow: when a task is in a domain a skill likely covers (writing tests, frontend/UI, a specific API or database, infra/Docker, a named framework, etc.) and a proven recipe would beat improvising, call load_skill - pass your task as `query` and your stack + constraints as `context` (required). It ranks candidates against your context and current repo, materializes the best match (SKILL.md + files into a temp folder, used like an installed skill), returns runner-up candidates you can switch to, and flags heavy dependencies. Verify the loaded skill against your project before trusting it.',
+  'Recommended workflow - DEFAULT TO LOADING: before you write tests, frontend/UI, an API/DB layer, infra/Docker/CI, or framework-specific code (esp. a fast-moving stack like a payments/auth/cloud SDK), call load_skill FIRST - pass your task as `query` and your stack + constraints as `context` (required) - then follow it instead of reciting best practices from memory. It ranks candidates against your context and current repo, materializes the best match (SKILL.md + files into a temp folder, used like an installed skill), returns runner-up candidates you can switch to, and flags heavy dependencies. Verify the loaded skill against your project before trusting it.',
   '',
-  'Use search_skillselion to browse options, top_skillselion for the leaderboard. Loading is read-only and cheap; if a loaded skill does not fit, ignore it.',
+  'It is safe to over-ask: loading is read-only and cheap, and if nothing matches load_skill tells you so. Use search_skillselion to browse options, top_skillselion for the leaderboard. If you do not see a `load_skill` tool, your client may surface MCP tools lazily - search your available tools for "skillselion" (e.g. via ToolSearch) first, then call it.',
 ].join('\n');
 
 // ---- URL + formatting helpers (ported from the web app's listing-url logic) ----
@@ -113,7 +113,11 @@ async function fetchListings(params) {
 // pass verbose natural-language queries ("build an MCP server in python, best
 // practices"). Generate progressively broader variants so a wordy query still
 // resolves instead of returning nothing.
-const STOP = new Set(['build', 'building', 'built', 'create', 'creating', 'make', 'making', 'add', 'use', 'using', 'write', 'writing', 'do', 'doing', 'set', 'setup', 'get', 'a', 'an', 'the', 'for', 'to', 'with', 'in', 'on', 'of', 'and', 'or', 'my', 'your', 'how', 'i', 'we', 'need', 'want', 'best', 'practices', 'practice', 'good', 'proper', 'help', 'please', 'some', 'that', 'this', 'it']);
+const STOP = new Set(['build', 'building', 'built', 'create', 'creating', 'make', 'making', 'add', 'use', 'using', 'write', 'writing', 'do', 'doing', 'set', 'setup', 'get', 'a', 'an', 'the', 'for', 'to', 'with', 'in', 'on', 'of', 'and', 'or', 'my', 'your', 'how', 'i', 'we', 'need', 'want', 'best', 'practices', 'practice', 'good', 'proper', 'help', 'please', 'some', 'that', 'this', 'it',
+  // Claude model names are noise as match terms - they appear in many skills'
+  // text ("works with Claude Haiku/Sonnet/Opus") and otherwise collide with
+  // unrelated user words (e.g. a "haiku" poem task matching a Bedrock skill).
+  'claude', 'haiku', 'sonnet', 'opus']);
 function queryVariants(q) {
   const toks = String(q).toLowerCase().split(/[^a-z0-9+#.]+/i).filter(Boolean);
   const sig = toks.filter((t) => !STOP.has(t));
@@ -164,7 +168,7 @@ function rankCandidates(rows, query, context, repoCats) {
       r.installs ? `${r.installs.toLocaleString()} installs` : (r.stars ? `★${r.stars}` : null),
       repoBoost ? 'fits this repo' : null,
     ].filter(Boolean).join(' · ');
-    return { row: r, score, why };
+    return { row: r, score, why, qHitLen: qHit.length, cHit };
   }).sort((a, b) => b.score - a.score);
 }
 
@@ -306,6 +310,14 @@ async function runServer() {
         const loadable = cand.filter((r) => isLoadableRepo(r.repo));
         const ranked = rankCandidates(loadable.length ? loadable : cand, query, context, repoCats);
         if (!ranked.length) return { content: [{ type: 'text', text: `No skill matched "${query}". Try search_skillselion with a shorter query, then load_skill by id.` }] };
+        // Relevance floor: if the top candidate shares NO query term (and no
+        // context term) with any skill, it won on popularity alone — loading it
+        // wastes the agent's context. Refuse honestly instead of returning junk.
+        if (ranked[0].qHitLen === 0 && ranked[0].cHit === 0) {
+          const near = ranked.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
+          return { content: [{ type: 'text', text:
+            `No skill on Skillselion clearly matches "${query}". The closest by popularity (${near}) don't match your task, so loading one likely won't help — proceed with your own approach, or call load_skill again with a more specific query / use search_skillselion to browse.` }] };
+        }
         row = ranked[0].row;
         alternates = ranked.slice(1, 3);
         id = row.id;
@@ -384,8 +396,9 @@ const DEFAULT_CONFIG = { packs: [{ key: 'popular', count: 10, categories: null }
 const PRIMING_DIRECTIVE = [
   'You have the **Skillselion MCP** - on-demand access to thousands of community-vetted Claude Code skills (each a real SKILL.md + bundled scripts/references), ranked by real installs.',
   '',
-  'When a task is in a domain a skill likely covers - writing tests, frontend/UI, an API or database, infra, a specific framework - and a proven recipe would beat improvising (most valuable in less-familiar or fast-moving territory), call load_skill: pass your task as `query` and your stack + constraints as `context` (required). FOLLOW the loaded skill instead of reciting "best practices" from memory.',
-  'load_skill returns the best match PLUS runner-up candidates and flags heavy dependencies - pick deliberately, verify against your project, and ignore a skill that does not fit.',
+  'DEFAULT TO LOADING: before you write tests, frontend/UI, an API/DB layer, infra/CI, or framework-specific code (esp. a fast-moving stack like a payments/auth/cloud SDK), call load_skill FIRST - pass your task as `query` and your stack + constraints as `context` (required) - then FOLLOW the loaded skill instead of reciting "best practices" from memory. A 5-second load beats shipping a stale or naive pattern.',
+  'It is safe to over-ask: if nothing matches, load_skill tells you so and costs almost nothing. It returns the best match PLUS runner-up candidates and flags heavy dependencies - pick deliberately, verify against your project, and ignore a skill that does not fit.',
+  'If you do not see a `load_skill` tool, your client may surface MCP tools lazily - search your available tools for "skillselion" (e.g. via ToolSearch) first, then call it.',
 ];
 const PRIMING_FOOTER = 'load_skill(query, context) searches + loads + shows alternates · search_skillselion(query) browses · top_skillselion lists the best.';
 
