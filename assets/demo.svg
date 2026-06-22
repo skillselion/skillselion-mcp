@@ -1,0 +1,42 @@
+<svg width="1100" height="470" viewBox="0 0 1100 470" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="search_skillselion demo">
+  <!-- window -->
+  <rect width="1100" height="470" fill="#1b1a18"/>
+  <rect x="0" y="0" width="1100" height="44" fill="#262320"/>
+  <circle cx="26" cy="22" r="7" fill="#d8455f"/>
+  <circle cx="50" cy="22" r="7" fill="#e0a23a"/>
+  <circle cx="74" cy="22" r="7" fill="#6fae7d"/>
+  <text x="550" y="28" font-family="ui-monospace,'JetBrains Mono',monospace" font-size="15" fill="#8a847b" text-anchor="middle">skillselion · mcp</text>
+
+  <g font-family="ui-monospace,'JetBrains Mono',monospace" font-size="18">
+    <!-- prompt -->
+    <text x="34" y="92" fill="#6fae7d">▸</text>
+    <text x="58" y="92" fill="#e8e3da">search_skillselion(<tspan fill="#e0a23a">"postgres"</tspan>, type: <tspan fill="#e0a23a">"skill"</tspan>)</text>
+
+    <text x="34" y="134" fill="#8a847b" font-size="15">Top results for "postgres":</text>
+
+    <!-- result 1 -->
+    <rect x="34" y="150" width="1032" height="86" fill="#222019" stroke="#d8455f" stroke-width="2"/>
+    <rect x="34" y="150" width="6" height="86" fill="#d8455f"/>
+    <text x="56" y="180" fill="#f7f4ef" font-size="19" font-weight="700">supabase-postgres-best-practices</text>
+    <rect x="470" y="163" width="62" height="24" fill="#d8455f"/>
+    <text x="501" y="180" fill="#fff" font-size="13" text-anchor="middle">skill</text>
+    <text x="56" y="208" fill="#9aa0a6" font-size="15">244,763 installs · ★ 2,207 · Databases</text>
+    <text x="56" y="228" fill="#6fae7d" font-size="14">npx skills add github.com/supabase/agent-skills --skill supabase-postgres…</text>
+
+    <!-- result 2 -->
+    <rect x="34" y="248" width="1032" height="58" fill="#201e18"/>
+    <rect x="34" y="248" width="6" height="58" fill="#5b7fb0"/>
+    <text x="56" y="278" fill="#e8e3da" font-size="18" font-weight="600">neon-postgres</text>
+    <text x="56" y="298" fill="#9aa0a6" font-size="14">42,999 installs · ★ 68 · Backend &amp; APIs</text>
+
+    <!-- result 3 -->
+    <rect x="34" y="318" width="1032" height="58" fill="#201e18"/>
+    <rect x="34" y="318" width="6" height="58" fill="#5b7fb0"/>
+    <text x="56" y="348" fill="#e8e3da" font-size="18" font-weight="600">azure-postgres</text>
+    <text x="56" y="368" fill="#9aa0a6" font-size="14">27,816 installs · ★ 1,173 · Backend &amp; APIs</text>
+
+    <!-- footer -->
+    <text x="34" y="416" fill="#8a847b" font-size="14">ranked by installs &amp; GitHub stars · read-only · no auth · queries</text>
+    <text x="700" y="416" fill="#d8455f" font-size="14">skillselion.com</text>
+  </g>
+</svg>
