@@ -18,8 +18,9 @@
 </p>
 
 <p align="center">
-  <b>Let your AI agent search <a href="https://skillselion.com">Skillselion</a> — a curated directory of Claude Code<br>
-  agent skills, MCP servers & plugin marketplaces, ranked by installs & GitHub stars — without leaving the editor.</b>
+  <b>Augment your coding agent with thousands of battle-tested skills.</b><br>
+  It searches <a href="https://skillselion.com">Skillselion</a> — a curated directory of Claude Code skills, MCP servers & marketplaces ranked by real installs —<br>
+  and pulls a skill's <b>actual instructions</b> to apply <b>mid-task</b>. So your agent works from proven patterns, not guesses.
 </p>
 
 <p align="center">
@@ -34,13 +35,14 @@
 
 ## ✨ What it does
 
-Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin marketplaces and ranks them by **real community signal** (installs + GitHub stars). This server puts that directory one tool-call away — so when you need "a trusted Postgres skill" or "the best code-review MCP," your agent finds it and hands you the **paste-ready install command**, without you ever opening a browser.
+Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin marketplaces, ranked by **real community signal** (installs + GitHub stars). This server turns that directory into a live capability for your agent: it can **search** for the right skill **and `get_skill` to pull its real instructions and apply them mid-task** — so instead of improvising "best practices," it works from the community's actual, battle-tested skill. **Find the skill → load it → follow it.**
 
 ## 🔧 Tools
 
 | Tool | What it does |
 |------|--------------|
 | 🔍 **`search_skillselion`** | Search by keyword or task (`postgres`, `code review`, `playwright`); optional `type` filter (`skill` / `mcp` / `marketplace`). Returns name, type, installs, stars, repo, an install command, and the listing URL. |
+| 📥 **`get_skill`** | **The augment.** Pulls a skill's real **`SKILL.md` instructions** (from its public repo) so the agent **applies** it to the task at hand — not just sees the name. Pass an `id` from search, or a `query`. |
 | 🏆 **`top_skillselion`** | The leaderboard — "what are the best Claude Code skills / MCP servers right now." Skills rank by installs; MCP servers & marketplaces by GitHub stars. |
 
 > **Read-only & private.** The server only issues `GET` requests to the public Skillselion catalog API. No auth, no writes, no secrets, no telemetry.
@@ -70,11 +72,32 @@ Add this to your MCP config:
 
 > Runs straight from this repo — **no build step**. Once published to npm, plain `skillselion-mcp` (without the `github:` prefix) will work too.
 
+## 🪄 Skill autopilot (one-command setup)
+
+Want your agent skill-aware **automatically**, every session? Run:
+
+```bash
+npx -y github:skillselion/skillselion-mcp setup --top 10
+```
+
+It does two things:
+
+- **Registers the MCP globally** (`claude mcp add --scope user`) — available in every project.
+- **Installs a Claude Code `SessionStart` hook** that, at the start of each session, hands your agent the **top N most-installed skills** (set with `--top`) and tells it to `get_skill` + apply the matching one whenever your task calls for it.
+
+So you don't have to remember the tools exist — the agent is primed to reach for proven skills on its own. Safe by design: your `~/.claude/settings.json` is **merged, never clobbered**, re-running de-dupes, and it only ever **reads** the catalog. Restart Claude Code to activate.
+
 ## 💬 Example
 
-> 🗣️ *"Find me a trusted Postgres skill for Claude Code."*
+> 🗣️ *"Set up Postgres for this project."*
 
-The agent calls `search_skillselion({ query: "postgres", type: "skill" })` and gets back the top ranked results with install commands — exactly like the card above. ⬆️
+Instead of winging it, your agent:
+
+1. `search_skillselion({ query: "postgres", type: "skill" })` → finds **supabase-postgres-best-practices** (244k installs)
+2. `get_skill({ id: "skill:supabase/agent-skills#supabase-postgres-best-practices" })` → pulls the real `SKILL.md`
+3. **applies those exact best-practices** to your code.
+
+With the [setup hook](#-skill-autopilot-one-command-setup) above, steps 1–2 happen on their own — the agent already knows the skill is there. ⬆️
 
 ## 🛠 Development
 

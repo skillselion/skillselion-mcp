@@ -21,7 +21,7 @@
     <rect x="470" y="163" width="62" height="24" fill="#d8455f"/>
     <text x="501" y="180" fill="#fff" font-size="13" text-anchor="middle">skill</text>
     <text x="56" y="208" fill="#9aa0a6" font-size="15">244,763 installs · ★ 2,207 · Databases</text>
-    <text x="56" y="228" fill="#6fae7d" font-size="14">npx skills add github.com/supabase/agent-skills --skill supabase-postgres…</text>
+    <text x="56" y="228" fill="#6fae7d" font-size="14">→ get_skill loads its SKILL.md so the agent applies it — not just installs</text>
 
     <!-- result 2 -->
     <rect x="34" y="248" width="1032" height="58" fill="#201e18"/>
