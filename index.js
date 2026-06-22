@@ -18,12 +18,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -81,7 +81,7 @@ function fmt(row) {
   if (desc) lines.push(desc.length > 220 ? desc.slice(0, 217) + '...' : desc);
   const install = installHint(row);
   if (install) lines.push('install: `' + install + '`');
-  if (row.type === 'skill') lines.push('apply now: call `get_skill` with id `' + row.id + '`');
+  if (row.type === 'skill') lines.push('load now: call `load_skill` with id `' + row.id + '`');
   lines.push(`details: ${listingUrl(row)}`);
   return lines.join('\n');
 }
@@ -117,6 +117,60 @@ async function fetchSkillContent(repo, slug) {
   return null;
 }
 
+async function ghTree(repo, branch) {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`, {
+      headers: { 'user-agent': CLIENT_HEADERS['user-agent'], accept: 'application/vnd.github+json' },
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    return Array.isArray(j.tree) ? j.tree : null;
+  } catch { return null; }
+}
+
+/** Materialize a skill's ENTIRE directory (SKILL.md + bundled scripts/refs/templates)
+ *  into a local temp folder, so the agent can load it like an installed skill -
+ *  follow the SKILL.md and read/run the bundled files. Returns the SKILL.md text,
+ *  the temp dir, and the manifest of bundled files. */
+async function loadFullSkill(repo, slug) {
+  const esc = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  for (const branch of ['main', 'master']) {
+    const tree = await ghTree(repo, branch);
+    if (!tree) continue;
+    const blobs = tree.filter((n) => n.type === 'blob');
+    let skillMdPath = blobs.find((n) => new RegExp(`(^|/)${esc}/SKILL\\.md$`, 'i').test(n.path))?.path;
+    if (!skillMdPath) skillMdPath = blobs.find((n) => /(^|\/)SKILL\.md$/i.test(n.path))?.path; // single-skill repo
+    if (!skillMdPath) continue;
+    const skillDir = skillMdPath.includes('/') ? skillMdPath.slice(0, skillMdPath.lastIndexOf('/')) : '';
+    const prefix = skillDir ? skillDir + '/' : '';
+    const files = blobs
+      .filter((n) => n.path === skillMdPath || n.path.startsWith(prefix))
+      .filter((n) => (n.size ?? 0) < 1_000_000)
+      .slice(0, 60);
+    const tmpDir = join(tmpdir(), 'skillselion', repo.replace(/[^\w.-]/g, '_'), slug.replace(/[^\w.-]/g, '_'));
+    mkdirSync(tmpDir, { recursive: true });
+    let skillMd = '';
+    const manifest = [];
+    for (const f of files) {
+      const rel = skillDir ? f.path.slice(prefix.length) : f.path;
+      try {
+        const raw = await fetch(`https://raw.githubusercontent.com/${repo}/${branch}/${f.path}`, {
+          headers: { 'user-agent': CLIENT_HEADERS['user-agent'] },
+        });
+        if (!raw.ok) continue;
+        const buf = Buffer.from(await raw.arrayBuffer());
+        const dest = join(tmpDir, rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, buf);
+        if (rel.toLowerCase() === 'skill.md') skillMd = buf.toString('utf8');
+        else manifest.push(rel);
+      } catch { /* skip this file */ }
+    }
+    if (skillMd) return { skillMd, tmpDir, manifest, skillDir, repo, slug };
+  }
+  return null;
+}
+
 // ---- mode: MCP server -------------------------------------------------------
 async function runServer() {
   const server = new McpServer({ name: 'skillselion', version: VERSION });
@@ -138,11 +192,11 @@ async function runServer() {
   );
 
   server.tool(
-    'get_skill',
-    'Fetch a skill\'s ACTUAL instructions (its SKILL.md) so you can APPLY it to the current task instead of improvising. This is how Skillselion augments you: search for a skill, then pull its real content and follow it. Pass the listing id from search_skillselion, or a query (the top-matching skill is used).',
+    'load_skill',
+    'Dynamically load a skill into your working context - like installing it, on demand. Fetches the skill\'s real SKILL.md AND any bundled files (scripts, references, templates) into a local temp folder, so you can FOLLOW the instructions and READ/RUN the bundled files exactly like an installed skill. Use this the moment your task matches a skill (e.g. doing frontend design -> load a design skill; writing tests -> load a testing skill). Pass an id from search_skillselion, or a query.',
     {
       id: z.string().optional().describe('A skill listing id, e.g. "skill:owner/repo#slug" (from search_skillselion).'),
-      query: z.string().optional().describe('Alternatively, a search query - the top-matching skill is fetched.'),
+      query: z.string().optional().describe('Alternatively, a search query - the top-matching skill is loaded.'),
     },
     async ({ id, query }) => {
       let row;
@@ -156,13 +210,22 @@ async function runServer() {
       const repo = m ? m[1] : row?.repo;
       const slug = m ? m[2] : '';
       if (!repo) return { content: [{ type: 'text', text: `Could not resolve a GitHub repo for "${id}".` }] };
-      const got = await fetchSkillContent(repo, slug);
-      if (!got) {
-        return { content: [{ type: 'text', text: `Couldn't fetch SKILL.md for "${id}". Install it instead: npx skills add https://github.com/${repo}${slug ? ` --skill ${slug}` : ''}` }] };
+
+      const loaded = await loadFullSkill(repo, slug);
+      if (loaded) {
+        const filesNote = loaded.manifest.length
+          ? `## Bundled files (materialized to ${loaded.tmpDir})\n${loaded.manifest.map((f) => '- ' + f).join('\n')}\n\nRead or run these from that folder exactly as the SKILL.md directs (e.g. \`python ${loaded.tmpDir}/scripts/<name>.py\`, or read \`${loaded.tmpDir}/references/<name>.md\`).`
+          : '## Bundled files: none - this skill is just its SKILL.md.';
+        const body = loaded.skillMd.length > 14000 ? loaded.skillMd.slice(0, 14000) + `\n\n…(truncated - full file at ${loaded.tmpDir}/SKILL.md)` : loaded.skillMd;
+        return { content: [{ type: 'text', text:
+          `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${loaded.tmpDir}\n\nFOLLOW these instructions for the current task, like an installed skill:\n\n## SKILL.md\n${body}\n\n${filesNote}` }] };
       }
-      const body = got.content.length > 12000 ? got.content.slice(0, 12000) + '\n\n…(truncated — see ' + got.url + ')' : got.content;
-      const header = `# Skill: ${slug || repo}\nSource: ${got.url}\n\nApply these instructions to the current task:\n\n`;
-      return { content: [{ type: 'text', text: header + body }] };
+
+      // fallback: just the SKILL.md text (e.g. GitHub tree API rate-limited)
+      const got = await fetchSkillContent(repo, slug);
+      if (!got) return { content: [{ type: 'text', text: `Couldn't load "${id}". Install it instead: npx skills add https://github.com/${repo}${slug ? ` --skill ${slug}` : ''}` }] };
+      const body = got.content.length > 12000 ? got.content.slice(0, 12000) + '\n\n…(truncated - see ' + got.url + ')' : got.content;
+      return { content: [{ type: 'text', text: `# Skill: ${slug || repo}\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}` }] };
     },
   );
 
@@ -204,15 +267,15 @@ async function buildSessionContext(top) {
     }
   } catch { /* fall back to the generic message */ }
   return [
-    'You have the **Skillselion MCP** connected — live access to thousands of community-vetted Claude Code skills, MCP servers and marketplaces, ranked by real installs.',
+    'You have the **Skillselion MCP** connected — dynamic, on-demand access to thousands of community-vetted Claude Code skills, ranked by real installs.',
     '',
-    'It AUGMENTS you while you work: when a task matches a known skill, call `get_skill` to pull its real instructions and follow them instead of improvising.',
+    'You can LOAD any of them mid-task, like an installed skill: when your work matches a skill (e.g. frontend design → a design skill; writing tests → a testing skill), call `load_skill` to pull its real SKILL.md (and any bundled scripts/references into a temp folder) and FOLLOW it — instead of improvising.',
     '',
     `Most-installed skills right now (top ${top}):`,
     list,
     '',
-    'Tools: `search_skillselion(query, type?)` · `get_skill(id | query)` · `top_skillselion(type?)`.',
-    'When you start work in one of these domains, FIRST `get_skill` the matching skill, then follow it.',
+    'Tools: `search_skillselion(query, type?)` · `load_skill(id | query)` · `top_skillselion(type?)`.',
+    'Whenever you begin a task a skill covers, FIRST `search_skillselion` then `load_skill` the matching one, and work from it.',
   ].join('\n');
 }
 
@@ -271,15 +334,15 @@ const API = '${API}';
     }).join('\\n');
   } catch {}
   const ctx = [
-    'You have the **Skillselion MCP** connected — live access to thousands of community-vetted Claude Code skills, ranked by real installs.',
+    'You have the **Skillselion MCP** connected — dynamic, on-demand access to thousands of community-vetted Claude Code skills, ranked by real installs.',
     '',
-    'It AUGMENTS you while you work: when a task matches a known skill, call get_skill to pull its real instructions and follow them instead of improvising.',
+    'You can LOAD any of them mid-task, like an installed skill: when your work matches a skill (e.g. frontend design -> a design skill; writing tests -> a testing skill), call load_skill to pull its real SKILL.md (and any bundled scripts/references into a temp folder) and FOLLOW it — instead of improvising.',
     '',
     'Most-installed skills right now (top ' + TOP + '):',
     list,
     '',
-    'Tools: search_skillselion(query, type?) · get_skill(id | query) · top_skillselion(type?).',
-    'When you start work in one of these domains, FIRST get_skill the matching skill, then follow it.'
+    'Tools: search_skillselion(query, type?) · load_skill(id | query) · top_skillselion(type?).',
+    'Whenever you begin a task a skill covers, FIRST search_skillselion then load_skill the matching one, and work from it.'
   ].join('\\n');
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: ctx } }));
 })();

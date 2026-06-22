@@ -35,14 +35,14 @@
 
 ## ✨ What it does
 
-Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin marketplaces, ranked by **real community signal** (installs + GitHub stars). This server turns that directory into a live capability for your agent: it can **search** for the right skill **and `get_skill` to pull its real instructions and apply them mid-task** — so instead of improvising "best practices," it works from the community's actual, battle-tested skill. **Find the skill → load it → follow it.**
+Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin marketplaces, ranked by **real community signal** (installs + GitHub stars). This server turns that directory into a live capability for your agent: it can **search** for the right skill and **`load_skill` to dynamically load it mid-task** — the real `SKILL.md` into context, **plus any bundled scripts / references / templates materialized into a temp folder** — so it works from the skill exactly like an installed one, instead of improvising "best practices." **Find the skill → load it → follow it.**
 
 ## 🔧 Tools
 
 | Tool | What it does |
 |------|--------------|
 | 🔍 **`search_skillselion`** | Search by keyword or task (`postgres`, `code review`, `playwright`); optional `type` filter (`skill` / `mcp` / `marketplace`). Returns name, type, installs, stars, repo, an install command, and the listing URL. |
-| 📥 **`get_skill`** | **The augment.** Pulls a skill's real **`SKILL.md` instructions** (from its public repo) so the agent **applies** it to the task at hand — not just sees the name. Pass an `id` from search, or a `query`. |
+| 📥 **`load_skill`** | **The dynamic load.** Pulls a skill's real **`SKILL.md`** into context **and materializes its whole directory** (scripts, references, templates) into a **temp folder**, so the agent uses it like an *installed* skill — read/run the bundled files included. Pass an `id` from search, or a `query`. |
 | 🏆 **`top_skillselion`** | The leaderboard — "what are the best Claude Code skills / MCP servers right now." Skills rank by installs; MCP servers & marketplaces by GitHub stars. |
 
 > **Read-only & private.** The server only issues `GET` requests to the public Skillselion catalog API. No auth, no writes, no secrets, no telemetry.
@@ -83,9 +83,9 @@ npx -y github:skillselion/skillselion-mcp setup --top 10
 It does two things:
 
 - **Registers the MCP globally** (`claude mcp add --scope user`) — available in every project.
-- **Installs a Claude Code `SessionStart` hook** that, at the start of each session, hands your agent the **top N most-installed skills** (set with `--top`) and tells it to `get_skill` + apply the matching one whenever your task calls for it.
+- **Installs a Claude Code `SessionStart` hook** that, at the start of each session, hands your agent the **top N most-installed skills** (set with `--top`) and tells it to **`load_skill`** the matching one whenever your task calls for it — so skills get loaded **dynamically, on demand**.
 
-So you don't have to remember the tools exist — the agent is primed to reach for proven skills on its own. Safe by design: your `~/.claude/settings.json` is **merged, never clobbered**, re-running de-dupes, and it only ever **reads** the catalog. Restart Claude Code to activate.
+So you don't have to remember the tools exist — the agent is primed to reach for (and load) proven skills on its own. Safe by design: your `~/.claude/settings.json` is **merged, never clobbered**, re-running de-dupes, and it only ever **reads** the catalog. Restart Claude Code to activate.
 
 ## 💬 Example
 
@@ -94,10 +94,10 @@ So you don't have to remember the tools exist — the agent is primed to reach f
 Instead of winging it, your agent:
 
 1. `search_skillselion({ query: "postgres", type: "skill" })` → finds **supabase-postgres-best-practices** (244k installs)
-2. `get_skill({ id: "skill:supabase/agent-skills#supabase-postgres-best-practices" })` → pulls the real `SKILL.md`
-3. **applies those exact best-practices** to your code.
+2. `load_skill({ id: "skill:supabase/agent-skills#supabase-postgres-best-practices" })` → loads the real `SKILL.md` into context **and drops any bundled scripts/refs into a temp folder**
+3. **follows that skill** — reading its references and running its scripts — like it was installed all along.
 
-With the [setup hook](#-skill-autopilot-one-command-setup) above, steps 1–2 happen on their own — the agent already knows the skill is there. ⬆️
+With the [setup hook](#-skill-autopilot-one-command-setup) above, steps 1–2 happen on their own — the agent loads the skill the moment your task calls for it. ⬆️
 
 ## 🛠 Development
 

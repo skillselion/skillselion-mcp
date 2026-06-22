@@ -13,7 +13,7 @@ const client = new Client({ name: 'smoke', version: '0' }, { capabilities: {} })
 await client.connect(transport);
 const { tools } = await client.listTools();
 const names = tools.map((t) => t.name).sort();
-assert.deepEqual(names, ['get_skill', 'search_skillselion', 'top_skillselion'], `unexpected tools: ${names}`);
+assert.deepEqual(names, ['load_skill', 'search_skillselion', 'top_skillselion'], `unexpected tools: ${names}`);
 for (const t of tools) assert.ok(t.description?.length > 20, `tool ${t.name} missing description`);
 await client.close();
 
