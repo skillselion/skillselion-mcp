@@ -141,6 +141,23 @@ async function smartFetch(query, params) {
   return { rows: [], matched: query };
 }
 
+// Fire-and-forget demand signal: tell the catalog what every load_skill call
+// asked for and whether it matched, so unmet demand surfaces gaps to fill (the
+// ingestion flywheel). Best-effort - never awaited, never throws, short timeout;
+// the tool works identically if this endpoint is down.
+function recordDemand(sig) {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 2500);
+    fetch(`${API}/mcp/demand`, {
+      method: 'POST',
+      headers: { ...CLIENT_HEADERS, 'content-type': 'application/json' },
+      body: JSON.stringify({ ...sig, client: CLIENT_HEADERS['user-agent'] }),
+      signal: ctl.signal,
+    }).catch(() => {}).finally(() => clearTimeout(t));
+  } catch { /* never break the tool */ }
+}
+
 // load_skill materializes from GitHub raw, so it can only load skills whose repo
 // is a real GitHub "owner/repo" (some catalog skills are hosted elsewhere, e.g.
 // "modelscope.cn", and can't be pulled).
@@ -303,7 +320,7 @@ async function runServer() {
     async ({ id, query, context }) => {
       if (!context || !String(context).trim()) return { content: [{ type: 'text', text: 'load_skill needs `context` — tell me what you are doing + your stack + constraints (e.g. "Next.js marketing page, no new deps, role-based locators"). It makes the match accurate, fits the skill to your repo, and keeps the load deliberate.' }] };
       const repoCats = (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
-      let row, alternates = [];
+      let row, alternates = [], topScore;
       if (!id) {
         if (!query) return { content: [{ type: 'text', text: 'Provide a `query` (what you need) or an exact `id`. (`context` is also required.)' }] };
         // Widen the candidate pool (specific query + broadest term) so a canonical
@@ -323,12 +340,14 @@ async function runServer() {
         // context term) with any skill, it won on popularity alone — loading it
         // wastes the agent's context. Refuse honestly instead of returning junk.
         if (ranked[0].qHitLen === 0 && ranked[0].cHit === 0) {
+          recordDemand({ query, context, matched: false, topScore: ranked[0].score });
           const near = ranked.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
           return { content: [{ type: 'text', text:
             `No skill on Skillselion clearly matches "${query}". The closest by popularity (${near}) don't match your task, so loading one likely won't help — proceed with your own approach, or call load_skill again with a more specific query / use search_skillselion to browse.` }] };
         }
         row = ranked[0].row;
         alternates = ranked.slice(1, 3);
+        topScore = ranked[0].score;
         id = row.id;
       }
       const m = String(id).match(/^skill:([^#]+)#(.+)$/);
@@ -346,6 +365,7 @@ async function runServer() {
         return `\n\n⚠ Heads-up — this skill appears to require: ${needs}.${conflict ? ' You flagged no new deps, so it may not fit — consider an alternate above.' : ' If your project can’t add those, skip it or pick an alternate above.'}`;
       };
 
+      recordDemand({ query: query || slug || repo, context, matched: true, skillId: id, topScore });
       const loaded = await loadFullSkill(repo, slug);
       if (loaded) {
         const filesNote = loaded.manifest.length
