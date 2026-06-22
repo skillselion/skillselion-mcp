@@ -23,7 +23,7 @@ import { join, dirname } from 'node:path';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.3.0';
+const VERSION = '0.3.1';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -93,6 +93,57 @@ async function fetchListings(params) {
   const data = await res.json();
   const rows = Array.isArray(data) ? data : (data.data || data.items || []);
   return rows.filter((r) => r && typeof r.name === 'string' && r.name.trim());
+}
+
+// The catalog `q` match is strict (extra words can exclude everything), but agents
+// pass verbose natural-language queries ("build an MCP server in python, best
+// practices"). Generate progressively broader variants so a wordy query still
+// resolves instead of returning nothing.
+const STOP = new Set(['build', 'building', 'built', 'create', 'creating', 'make', 'making', 'add', 'use', 'using', 'write', 'writing', 'do', 'doing', 'set', 'setup', 'get', 'a', 'an', 'the', 'for', 'to', 'with', 'in', 'on', 'of', 'and', 'or', 'my', 'your', 'how', 'i', 'we', 'need', 'want', 'best', 'practices', 'practice', 'good', 'proper', 'help', 'please', 'some', 'that', 'this', 'it']);
+function queryVariants(q) {
+  const toks = String(q).toLowerCase().split(/[^a-z0-9+#.]+/i).filter(Boolean);
+  const sig = toks.filter((t) => !STOP.has(t));
+  const variants = [q];
+  // Specific -> broad: keep two-word phrases (more precise) before any single
+  // token, so a generic word like "server" is only a last resort.
+  if (sig.length) variants.push(sig.join(' '));                 // all significant words
+  if (sig.length > 2) variants.push(sig.slice(0, 2).join(' ')); // leading pair (often the noun phrase, e.g. "mcp server")
+  if (sig.length > 2) variants.push(sig.slice(-2).join(' '));   // trailing pair
+  const longest = [...sig].sort((a, b) => b.length - a.length)[0];
+  if (longest) variants.push(longest);                          // single most distinctive token, last resort
+  return [...new Set(variants.filter((v) => v && v.trim()))];
+}
+/** Like fetchListings but tolerant of wordy queries: tries the full query, then
+ *  progressively broader variants, returning the first non-empty hit. */
+async function smartFetch(query, params) {
+  for (const v of queryVariants(query)) {
+    const rows = await fetchListings({ ...params, q: v });
+    if (rows.length) return { rows, matched: v };
+  }
+  return { rows: [], matched: query };
+}
+
+// load_skill materializes from GitHub raw, so it can only load skills whose repo
+// is a real GitHub "owner/repo" (some catalog skills are hosted elsewhere, e.g.
+// "modelscope.cn", and can't be pulled).
+const isLoadableRepo = (repo) => /^[\w.-]+\/[\w.-]+$/.test(String(repo || ''));
+
+/** Pick the most RELEVANT row for a query: count query terms appearing in
+ *  name/repo/summary, tie-broken by the API's install order (rows arrive
+ *  install-sorted). Avoids load_skill auto-loading a high-install but loosely
+ *  related skill (e.g. picking azure-aigateway for "build an mcp server"). */
+function pickRelevant(rows, query) {
+  if (!rows.length) return undefined;
+  const terms = String(query).toLowerCase().split(/[^a-z0-9+#.]+/i).filter((t) => t && !STOP.has(t));
+  if (!terms.length) return rows[0];
+  let best = rows[0], bestScore = -1;
+  for (const r of rows) {
+    const hay = `${r.name || ''} ${r.repo || ''} ${r.summary || r.description || ''}`.toLowerCase();
+    let s = 0;
+    for (const t of terms) if (hay.includes(t)) s++;
+    if (s > bestScore) { bestScore = s; best = r; } // strict > keeps highest-install on ties
+  }
+  return best;
 }
 
 /** Fetch a skill's real SKILL.md from its public GitHub repo. skills.sh skills live
@@ -184,9 +235,10 @@ async function runServer() {
       limit: z.number().int().min(1).max(25).optional().describe('Max results (default 8).'),
     },
     async ({ query, type, limit }) => {
-      const rows = await fetchListings({ q: query, ...(type ? { type } : {}), limit: String(limit ?? 8) });
-      if (!rows.length) return { content: [{ type: 'text', text: `No Skillselion results for "${query}".` }] };
-      const head = `Top ${rows.length} Skillselion results for "${query}"${type ? ` (type: ${type})` : ''}:\n`;
+      const { rows, matched } = await smartFetch(query, { ...(type ? { type } : {}), limit: String(limit ?? 8) });
+      if (!rows.length) return { content: [{ type: 'text', text: `No Skillselion results for "${query}". Try a shorter query - a single tool, framework or task (e.g. "postgres", "mcp server", "code review").` }] };
+      const note = matched !== query ? ` (broadened to "${matched}")` : '';
+      const head = `Top ${rows.length} Skillselion results for "${query}"${note}${type ? ` (type: ${type})` : ''}:\n`;
       return { content: [{ type: 'text', text: head + '\n' + rows.map(fmt).join('\n\n') }] };
     },
   );
@@ -201,11 +253,14 @@ async function runServer() {
     async ({ id, query }) => {
       let row;
       if (!id && query) {
-        const rows = await fetchListings({ q: query, type: 'skill', limit: '1' });
-        row = rows[0];
+        const { rows } = await smartFetch(query, { type: 'skill', limit: '8' });
+        const loadable = rows.filter((r) => isLoadableRepo(r.repo));
+        row = pickRelevant(loadable.length ? loadable : rows, query);
         id = row?.id;
       }
-      if (!id) return { content: [{ type: 'text', text: 'Provide a skill `id` (from search_skillselion) or a `query`.' }] };
+      if (!id) return { content: [{ type: 'text', text: query
+        ? `No skill matched "${query}". Run search_skillselion with a shorter query (e.g. "mcp server", "postgres", "testing") to find a skill id, then call load_skill with that id.`
+        : 'Provide a skill `id` (from search_skillselion) or a `query`.' }] };
       const m = String(id).match(/^skill:([^#]+)#(.+)$/);
       const repo = m ? m[1] : row?.repo;
       const slug = m ? m[2] : '';
