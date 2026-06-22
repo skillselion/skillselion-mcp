@@ -63,8 +63,8 @@ Last updated: **Loop 3** (test + fix) - 2026-06-22, VERSION 0.5.3. Tests: `test/
 | E4 | offline priming | directive-only fallback | pass | code-verified (printSessionContext catch) |
 | E5 | malformed/dead skill | fallback to alternate, then install hint | fixed | load now tries pick + 2 alternates before giving up (frontend_pricing no longer dead-ends) |
 | E6 | GitHub rate-limit | 60->5000 w/ token | fixed | added GITHUB_TOKEN/GH_TOKEN support on all 3 GitHub fetches |
-| E7 | trigger rate (A1/A2) | re-measure vs 8% baseline | untested | needs the claude -p swarm (Loop 4) - not re-run yet |
-| E8 | gap-targeting yields to local | prefer local plugin | untested | needs swarm (Loop 4) |
+| E7 | trigger rate (A1/A2) | re-measure vs 8% baseline | tested | Loop 4 swarm: realistic 1/9 (unchanged); native-blocked 2/9 (vs ~1/9). Discoverability works (agent ToolSearches skillselion, load_skill IS available) - it declines on confident/familiar tasks. Trigger is **model-confidence-gated**, not what these fixes targeted. |
+| E8 | gap-targeting yields to local | prefer local plugin | pass | Loop 4: on overlap domains (supabase/frontend/nestjs/seo) the agent uses the **native** plugin (native=1), MCP correctly stays out - exactly the intended yield |
 
 ## D. DOCS
 
@@ -86,6 +86,13 @@ Last updated: **Loop 3** (test + fix) - 2026-06-22, VERSION 0.5.3. Tests: `test/
 - **I1/I17 interactive picker, I15 history:** interactive/best-effort; logic exercised via flags, not a pty, this loop.
 - **I18 uninstall:** no command exists. 0.5.4 candidate.
 - **E7/E8 trigger + gap-yield:** require the `claude -p` swarm; Loop 4.
+
+## Loop 4 - trigger swarm (2026-06-22, local 0.5.3 build, 9 positives + 3 negatives)
+- **Realistic (hook + native plugins present): 1/9 triggered** (stripe -> stripe-integration-expert). Same as the 0.5.2 baseline.
+- **Native-blocked (isolates the MCP's own trigger): 2/9** (stripe, frontend_pricing). Up from ~1/9.
+- **Negatives false-triggered: 0/3** (good - no over-triggering).
+- **Gap-yield confirmed:** on overlap domains the agent ran the local plugin (`native=1`), MCP stayed out - working as designed.
+- **Root cause of low trigger (verified, not inferred):** runs COMPLETED (result=success, not killed) and the agent **did** ToolSearch for skillselion and **had** `load_skill` available - it just declined on tasks it's confident about (playwright/mcp/ci/react), building from memory. So trigger is gated by **model confidence**, not discoverability or the deferred-tool friction. The 0.5.3 fixes targeted relevance/floor/robustness (all improved); trigger is a separate, inherent ceiling. Moving it further would need a more coercive priming directive (risk: annoying real users) and still can't force a tool call.
 
 ## Prism/backend follow-ups (NOT MCP scope)
 - Populate `semanticTags` / `taskQueries` / `keywords` on listings so load_skill ranking is semantic.
