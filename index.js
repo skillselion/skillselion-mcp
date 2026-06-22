@@ -21,11 +21,11 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { createInterface } from 'node:readline';
+import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -470,6 +470,50 @@ function inferHistoryCategories() {
   return Object.entries(counts).sort((a, b) => b[1] - a[1]).filter(([, n]) => n > 0).slice(0, 3).map(([c]) => c);
 }
 
+// ---- tiny no-dep TTY picker --------------------------------------------------
+// multi=true -> checkboxes (space toggles, enter confirms all checked).
+// multi=false -> radio (enter selects the highlighted row). Each item may carry a
+// short `hint` shown dimmed so every option/step explains itself.
+function select(title, items, multi) {
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    let cursor = 0;
+    const checked = items.map((it) => !!it.checked);
+    const mark = (i) => (multi ? (checked[i] ? '\x1b[32m◉\x1b[0m' : '◯') : (i === cursor ? '\x1b[36m●\x1b[0m' : '○'));
+    const keysHint = multi
+      ? '  \x1b[2m↑/↓ move · space toggle · a all · enter confirm · esc cancel\x1b[0m'
+      : '  \x1b[2m↑/↓ move · enter select · esc cancel\x1b[0m';
+    const draw = (redraw) => {
+      let out = redraw ? `\x1b[${items.length + 2}A` : '';
+      out += `  \x1b[1m${title}\x1b[0m\x1b[K\n`;
+      items.forEach((it, i) => {
+        const ptr = i === cursor ? '\x1b[36m❯\x1b[0m' : ' ';
+        const desc = it.hint ? `  \x1b[2m— ${it.hint}\x1b[0m` : '';
+        out += `  ${ptr} ${mark(i)} ${it.label}${desc}\x1b[K\n`;
+      });
+      out += keysHint + '\x1b[K\n';
+      process.stdout.write(out);
+    };
+    const finish = (val) => { stdin.removeListener('keypress', onKey); if (stdin.isTTY) stdin.setRawMode(false); process.stdout.write('\n'); resolve(val); };
+    const onKey = (s, key) => {
+      if (!key) return;
+      if (key.ctrl && key.name === 'c') { if (stdin.isTTY) stdin.setRawMode(false); process.stdout.write('\n'); process.exit(130); }
+      if (key.name === 'up' || key.name === 'k') cursor = (cursor - 1 + items.length) % items.length;
+      else if (key.name === 'down' || key.name === 'j' || key.name === 'tab') cursor = (cursor + 1) % items.length;
+      else if (multi && key.name === 'space') checked[cursor] = !checked[cursor];
+      else if (multi && s === 'a') { const all = checked.every(Boolean); for (let i = 0; i < checked.length; i++) checked[i] = !all; }
+      else if (key.name === 'return') return finish(multi ? items.filter((_, i) => checked[i]) : items[cursor]);
+      else if (key.name === 'escape') return finish(null);
+      draw(true);
+    };
+    emitKeypressEvents(stdin);
+    if (stdin.isTTY) stdin.setRawMode(true);
+    stdin.resume();
+    draw(false);
+    stdin.on('keypress', onKey);
+  });
+}
+
 // ---- mode: setup (register MCP + install SessionStart hook) -----------------
 async function runSetup() {
   const argv = process.argv.slice(3);
@@ -496,18 +540,33 @@ async function runSetup() {
   let history = flag('--history');
 
   if (interactive) {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q) => new Promise((res) => rl.question(q, (a) => res(a.trim())));
-    const keys = Object.keys(PACKS);
-    log('  Which skill packs should prime each session? (your agent can still load ANY skill)');
-    keys.forEach((k, i) => log(`    ${i + 1}) ${PACKS[k].label}`));
-    const pick = (await ask('  Packs - comma numbers, "all", or Enter = Popular: ')).toLowerCase();
-    packSpec = pick === 'all' ? 'all' : (pick ? pick.split(',').map((s) => keys[Number(s.trim()) - 1]).filter(Boolean).join(',') : '') || 'popular';
-    explicitPerPack = Math.max(1, Math.min(15, Number(await ask('  Skills per pack? [3]: ')) || 3));
-    auto = !/^n/i.test(await ask('  Adapt to the current repo each session? [Y/n]: '));
-    history = /^y/i.test(await ask('  Personalize from your Claude Code / Codex history? [y/N]: '));
-    rl.close();
-    log('');
+    try {
+      const items = [
+        { label: 'Popular',                key: 'popular',    checked: true, hint: 'the most-installed skills overall (a safe default)' },
+        { label: 'Frontend & Design',      key: 'frontend',   hint: 'React/Next/Vue, Tailwind, UI & UX design' },
+        { label: 'AI & Agents',            key: 'ai-agents',  hint: 'agents, LLM/RAG, prompts & MCP tooling' },
+        { label: 'Generative Media',       key: 'media',      hint: 'image & video generation' },
+        { label: 'Backend & Data',         key: 'backend',    hint: 'APIs, databases, data/ML' },
+        { label: 'DevOps & Cloud',         key: 'devops',     hint: 'Docker, cloud, CI/CD' },
+        { label: 'Quality',                key: 'quality',    hint: 'testing, code review, debugging' },
+        { label: 'Automation & Marketing', key: 'automation', hint: 'workflows, productivity, SEO' },
+        { label: 'Adapt to current repo',  opt: 'auto', checked: true, hint: 'each session also surfaces skills matching THIS repo’s stack' },
+        { label: 'Use my history',         opt: 'history',    hint: 'one-time scan of Claude Code / Codex history to infer your focus' },
+      ];
+      const sel = await select('Which skill packs prime each session?  (you can still load ANY skill on demand)', items, true);
+      if (!sel) { log('  Setup cancelled.'); return; }
+      auto = sel.some((i) => i.opt === 'auto');
+      history = sel.some((i) => i.opt === 'history');
+      const packKeys = sel.filter((i) => i.key).map((i) => i.key);
+      packSpec = packKeys.length ? packKeys.join(',') : 'popular';
+      const csel = await select('How many skills to prime per pack?  (more = more examples, more context used)',
+        [3, 5, 8, 10].map((n) => ({ label: `${n} per pack`, n, checked: n === 3 })), false);
+      explicitPerPack = csel ? csel.n : 3;
+      log('');
+    } catch (e) {
+      log(`  (interactive picker unavailable: ${e.message} — using defaults: Popular + repo-aware)`);
+      packSpec = 'popular'; auto = true;
+    }
   }
 
   // resolve packs -> config (count precedence: pack:N > --per-pack > popular?top|10 : 3)
