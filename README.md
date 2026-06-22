@@ -56,8 +56,10 @@ Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin 
 ### Claude Code
 
 ```bash
-claude mcp add skillselion -- npx -y github:skillselion/skillselion-mcp
+claude mcp add skillselion --scope user -- npx -y github:skillselion/skillselion-mcp
 ```
+
+`--scope user` makes it available in **all** your projects (drop it to add to the current project only).
 
 ### Claude Desktop / Cursor / Codex
 
@@ -117,6 +119,31 @@ Instead of winging it, your agent:
 3. **follows that skill** — reading its references and running its scripts — like it was installed all along.
 
 With the [setup hook](#-skill-autopilot-one-command-setup) above, steps 1–2 happen on their own — the agent loads the skill the moment your task calls for it. ⬆️
+
+## 🩺 Troubleshooting
+
+**The agent never calls `load_skill` / I don't see the tools.**
+Some clients (including recent Claude Code) surface MCP tools **lazily** - they don't appear in the
+initial tool list and are only loaded on demand via a tool search. If your agent doesn't seem to see
+`load_skill`, tell it to **search its tools for "skillselion" first** (e.g. ToolSearch), then call it.
+The [setup hook](#-skill-autopilot-one-command-setup) primes each session with this nudge so it
+happens on its own.
+
+**`load_skill` returns just the `SKILL.md` text, without the bundled files.**
+Materializing a skill's full directory uses the GitHub API, which is rate-limited to **60 requests/hr
+when unauthenticated**. Heavy use exhausts that and the server falls back to the raw `SKILL.md` only.
+Set a **`GITHUB_TOKEN`** (or `GH_TOKEN`) in the server's environment to raise the limit to **5000/hr**
+and keep full multi-file loads working. It's read-only and optional.
+
+**"No skill on Skillselion clearly matches ..."**
+That's the relevance floor working as intended - nothing in the catalog topically matched your task,
+so loading a merely-popular skill would just waste context. Try a more specific `query`, or
+`search_skillselion` to browse.
+
+**Setup said it couldn't auto-register.**
+Run the printed `claude mcp add ...` line yourself. Auto-registration uses the `claude` binary; if it
+isn't on the setup process's `PATH` (common under `npx`), setup resolves it from common install
+locations + a login shell, but a non-standard install can still miss.
 
 ## 🛠 Development
 
