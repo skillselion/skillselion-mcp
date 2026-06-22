@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -545,6 +545,26 @@ function select(title, items, multi) {
   });
 }
 
+// Resolve the absolute path to the `claude` binary. `spawnSync('claude')` relies
+// on PATH, but when setup runs via npx the process PATH often lacks ~/.local/bin
+// or /opt/homebrew/bin (where claude lives) -> registration silently fails. Check
+// known locations + PATH, then fall back to a login shell that knows the real PATH.
+function resolveClaude() {
+  const cands = [
+    join(homedir(), '.local', 'bin', 'claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+    ...(process.env.PATH || '').split(':').filter(Boolean).map((d) => join(d, 'claude')),
+  ];
+  for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* skip */ } }
+  try {
+    const r = spawnSync(process.env.SHELL || '/bin/zsh', ['-lc', 'command -v claude'], { encoding: 'utf8' });
+    const p = (r.stdout || '').trim().split('\n').pop();
+    if (p && existsSync(p)) return p;
+  } catch { /* skip */ }
+  return null;
+}
+
 // ---- mode: setup (register MCP + install SessionStart hook) -----------------
 async function runSetup() {
   const argv = process.argv.slice(3);
@@ -634,9 +654,12 @@ async function runSetup() {
 
   // 1) register the MCP server globally (best-effort; print manual fallback)
   log('  1/3  Registering the MCP server (claude mcp add --scope user)…');
-  const r = spawnSync('claude', ['mcp', 'add', 'skillselion', '--scope', 'user', '--', 'npx', '-y', 'github:skillselion/skillselion-mcp'], { encoding: 'utf8' });
+  const claudeBin = resolveClaude();
+  const r = claudeBin
+    ? spawnSync(claudeBin, ['mcp', 'add', 'skillselion', '--scope', 'user', '--', 'npx', '-y', 'github:skillselion/skillselion-mcp'], { encoding: 'utf8' })
+    : { status: 1 };
   if (r.status === 0) log('       ✓ registered (scope: user — available in all projects)');
-  else log('       ! could not run `claude` — add it yourself:\n         claude mcp add skillselion --scope user -- npx -y github:skillselion/skillselion-mcp');
+  else log('       ! could not auto-register — run this yourself:\n         claude mcp add skillselion --scope user -- npx -y github:skillselion/skillselion-mcp');
 
   // 2) write the self-contained SessionStart hook. It reads ~/.skillselion/
   // config.json and reuses the SAME priming functions as the server (embedded
