@@ -51,6 +51,8 @@ Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin 
 
 ## 🚀 Install
 
+> **Using an AI agent?** Just tell it: *"install the Skillselion MCP from github.com/skillselion/skillselion-mcp"* — it can run the commands below itself. For a fully unattended install (no prompts), point it at `setup --yes` (see [Skill autopilot](#-skill-autopilot-one-command-setup)).
+
 ### Claude Code
 
 ```bash
@@ -76,18 +78,33 @@ Add this to your MCP config:
 
 ## 🪄 Skill autopilot (one-command setup)
 
-Want your agent skill-aware **automatically**, every session? Run:
+Want your agent skill-aware **automatically**, every session?
 
 ```bash
-npx -y github:skillselion/skillselion-mcp setup --top 10
+# Interactive — pick your packs (humans, in a terminal)
+npx -y github:skillselion/skillselion-mcp setup
+
+# Non-interactive — for agents / CI / scripts (never prompts)
+npx -y github:skillselion/skillselion-mcp setup --yes
+npx -y github:skillselion/skillselion-mcp setup --packs frontend,ai-agents --per-pack 5 --auto --yes
 ```
 
-It does two things:
+It **registers the MCP globally** (`claude mcp add --scope user`) and installs a Claude Code **`SessionStart` hook** that primes every session with relevant skills and tells the agent to **`load_skill`** the right one the moment a task matches — so skills load **dynamically, on demand**, without you remembering the tools exist.
 
-- **Registers the MCP globally** (`claude mcp add --scope user`) — available in every project.
-- **Installs a Claude Code `SessionStart` hook** that, at the start of each session, hands your agent the **top N most-installed skills** (set with `--top`) and tells it to **`load_skill`** the matching one whenever your task calls for it — so skills get loaded **dynamically, on demand**.
+**Choose what it primes you with** (instead of a generic global top-10):
 
-So you don't have to remember the tools exist — the agent is primed to reach for (and load) proven skills on its own. Safe by design: your `~/.claude/settings.json` is **merged, never clobbered**, re-running de-dupes, and it only ever **reads** the catalog. Restart Claude Code to activate.
+| Flag | What it does |
+|---|---|
+| `--packs <a,b,…>` | one or more **packs** (or `all`), e.g. `--packs frontend,backend` |
+| `--packs frontend:6,backend:3` | per-pack skill counts |
+| `--per-pack N` | skills per pack (default 3) · `--top N` sets the `popular` count |
+| `--auto` | also adapt each session to the **current repo's stack** (Next.js → frontend, Python → data, Docker → devops) |
+| `--history` | infer your focus from **Claude Code / Codex history** (one-time scan at setup) |
+| `--yes` / `--non-interactive` | never prompt (this is the **default whenever there's no terminal**, so agents never hang) |
+
+**Packs:** `popular` *(default)* · `frontend` · `ai-agents` · `media` *(generative)* · `backend` · `devops` · `quality` · `automation`.
+
+Safe by design: `~/.claude/settings.json` is **merged, never clobbered**, re-running **de-dupes + upgrades** the hook in place, it only ever **reads** the catalog, and the hook runs via an **absolute node path** so it can't silently fail on `PATH`. Restart Claude Code to activate.
 
 ## 💬 Example
 
