@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.4.1';
+const VERSION = '0.5.0';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -39,7 +39,7 @@ const CLIENT_HEADERS = {
 const SERVER_INSTRUCTIONS = [
   'Skillselion is a directory of thousands of community-vetted Claude Code skills - each a real SKILL.md plus bundled scripts/references, ranked by install count.',
   '',
-  'Recommended workflow: when a task is in a domain a skill likely covers (writing tests, frontend/UI, a specific API or database, infra/Docker, a named framework, etc.), call load_skill with the task description FIRST and follow the returned skill instead of working from memory. load_skill searches the catalog and materializes the best match (its SKILL.md + files into a temp folder) in one step - so you work from a proven, installed-equivalent skill rather than improvising "best practices".',
+  'Recommended workflow: when a task is in a domain a skill likely covers (writing tests, frontend/UI, a specific API or database, infra/Docker, a named framework, etc.) and a proven recipe would beat improvising, call load_skill - pass your task as `query` and your stack + constraints as `context` (required). It ranks candidates against your context and current repo, materializes the best match (SKILL.md + files into a temp folder, used like an installed skill), returns runner-up candidates you can switch to, and flags heavy dependencies. Verify the loaded skill against your project before trusting it.',
   '',
   'Use search_skillselion to browse options, top_skillselion for the leaderboard. Loading is read-only and cheap; if a loaded skill does not fit, ignore it.',
 ].join('\n');
@@ -142,26 +142,44 @@ async function smartFetch(query, params) {
 // "modelscope.cn", and can't be pulled).
 const isLoadableRepo = (repo) => /^[\w.-]+\/[\w.-]+$/.test(String(repo || ''));
 
-/** Pick the most RELEVANT row for a query: count query terms appearing in
- *  name/repo/summary, tie-broken by the API's install order (rows arrive
- *  install-sorted). Avoids load_skill auto-loading a high-install but loosely
- *  related skill (e.g. picking azure-aigateway for "build an mcp server"). */
-function pickRelevant(rows, query) {
-  if (!rows.length) return undefined;
-  const terms = String(query).toLowerCase().split(/[^a-z0-9+#.]+/i).filter((t) => t && !STOP.has(t));
-  if (!terms.length) return rows[0];
-  let best = rows[0], bestScore = -Infinity;
-  for (const r of rows) {
-    const hay = `${r.name || ''} ${r.repo || ''} ${r.summary || r.description || ''}`.toLowerCase();
-    let overlap = 0;
-    for (const t of terms) if (hay.includes(t)) overlap++;
-    // relevance dominates, but popularity breaks near-ties so a canonical
-    // high-install skill wins over an obscure one that merely term-matches.
+const sigTerms = (s) => String(s || '').toLowerCase().split(/[^a-z0-9+#.]+/i).filter((t) => t.length > 1 && !STOP.has(t));
+
+/** Rank candidates by relevance to the task (query) + the agent's stated context
+ *  + the current repo's stack. Returns the sorted list with a score and a short
+ *  "why" per row, so load_skill can show the agent real options (not a silent,
+ *  black-box single pick) and pick a canonical match over an obscure one. */
+function rankCandidates(rows, query, context, repoCats) {
+  const qTerms = sigTerms(query);
+  const cTerms = sigTerms(context).slice(0, 16);
+  return rows.map((r) => {
+    const hay = `${r.name || ''} ${r.repo || ''} ${r.summary || r.description || ''} ${r.category || ''}`.toLowerCase();
+    const qHit = qTerms.filter((t) => hay.includes(t));
+    const cHit = cTerms.filter((t) => hay.includes(t)).length;
+    const repoBoost = repoCats.includes(r.category) ? 1 : 0;
     const pop = Math.log10((r.installs || 0) + (r.stars || 0) + 1);
-    const score = overlap * 3 + pop;
-    if (score > bestScore) { bestScore = score; best = r; }
-  }
-  return best;
+    const score = qHit.length * 3 + cHit * 1 + repoBoost * 2 + pop;
+    const why = [
+      qHit.length ? `matches ${qHit.slice(0, 3).join('/')}` : null,
+      r.category,
+      r.installs ? `${r.installs.toLocaleString()} installs` : (r.stars ? `★${r.stars}` : null),
+      repoBoost ? 'fits this repo' : null,
+    ].filter(Boolean).join(' · ');
+    return { row: r, score, why };
+  }).sort((a, b) => b.score - a.score);
+}
+
+/** Scan a SKILL.md for external dependencies an agent should know about BEFORE
+ *  relying on it (the #1 ask from real agent feedback: a skill that needed the
+ *  `belt` CLI wasted a load). Best-effort, content-based. */
+function detectDeps(md) {
+  const tools = new Set();
+  const installRe = /\b(?:pip3?|pipx|uv(?:\s+tool)?)\s+install\s+([@\w.-]+)|\bnpm\s+i(?:nstall)?\s+-g\s+([@\w./-]+)|\b(?:brew|apt-get|apt|cargo|gem|go)\s+install\s+([@\w./-]+)/gi;
+  let m;
+  while ((m = installRe.exec(md))) tools.add(m[1] || m[2] || m[3]);
+  const named = md.match(/\b(ffmpeg|imagemagick|docker|kubectl|terraform|gcloud|poppler|libreoffice|pandoc|playwright|chromium)\b/gi) || [];
+  named.forEach((t) => tools.add(t.toLowerCase()));
+  const needsSecret = /\b(api[ _-]?key|access[ _-]?token|bearer token|secret key|\.env\b)\b/i.test(md);
+  return { tools: [...tools].slice(0, 6), needsSecret };
 }
 
 /** Fetch a skill's real SKILL.md from its public GitHub repo. skills.sh skills live
@@ -263,36 +281,49 @@ async function runServer() {
 
   server.tool(
     'load_skill',
-    'Load a community-vetted skill into your context on demand - like installing it mid-task. PROACTIVELY reach for this the moment a task is in a domain a skill likely covers (writing tests, frontend/UI, a specific API or database, infra/Docker, a named framework, ...): call load_skill with the task/keyword and FOLLOW the returned skill BEFORE writing code or "best practices" from memory - a proven skill beats improvising. It searches Skillselion and materializes the best match (the real SKILL.md plus bundled scripts/references into a temp folder) in ONE step, so you read/run the bundled files exactly like an installed skill. Pass a query (it finds + loads the best skill) or an id from search_skillselion. Read-only and cheap - ignore the skill if it does not fit.',
+    'Load a community-vetted skill into your context on demand - like installing it mid-task. Reach for this when a task is in a domain a skill likely covers (tests, frontend/UI, an API/DB, infra, a named framework) and a proven recipe would beat improvising - most valuable in territory you are less sure of, or fast-moving stacks where your memory may be stale. You MUST pass `context` (your task + stack + constraints): it ranks candidates, fits them to your current repo, flags dependency mismatches, and keeps the load deliberate. Returns the best match (real SKILL.md + bundled scripts/refs materialized to a temp folder, used like an installed skill) PLUS the next-best candidates so you can switch. Always verify the loaded skill against your project before trusting it.',
     {
-      id: z.string().optional().describe('A skill listing id, e.g. "skill:owner/repo#slug" (from search_skillselion).'),
-      query: z.string().optional().describe('Alternatively, a search query - the top-matching skill is loaded.'),
+      query: z.string().optional().describe('What you need - task/skill keywords (e.g. "playwright e2e tests"). Required unless you pass an exact id.'),
+      context: z.string().describe('REQUIRED. What you are actually doing + your stack + constraints/anti-patterns (e.g. "Next.js marketing page, no new deps, role-based locators"). Ranks candidates, fits them to your repo, and flags dependency mismatches. Be specific - this also keeps the load deliberate, not reflexive.'),
+      id: z.string().optional().describe('An exact skill id from search_skillselion, e.g. "skill:owner/repo#slug".'),
     },
-    async ({ id, query }) => {
-      let row;
-      if (!id && query) {
-        // Widen the candidate pool: the specific query AND the broadest term, so a
-        // canonical high-install skill competes even when a narrow query only
-        // surfaced an obscure match. Then rank by relevance + popularity.
-        const variants = queryVariants(query);
-        const broad = variants[variants.length - 1];
+    async ({ id, query, context }) => {
+      if (!context || !String(context).trim()) return { content: [{ type: 'text', text: 'load_skill needs `context` — tell me what you are doing + your stack + constraints (e.g. "Next.js marketing page, no new deps, role-based locators"). It makes the match accurate, fits the skill to your repo, and keeps the load deliberate.' }] };
+      const repoCats = (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
+      let row, alternates = [];
+      if (!id) {
+        if (!query) return { content: [{ type: 'text', text: 'Provide a `query` (what you need) or an exact `id`. (`context` is also required.)' }] };
+        // Widen the candidate pool (specific query + broadest term) so a canonical
+        // skill competes with an obscure match, then rank by query + your context
+        // + the current repo's stack - and surface the runners-up too.
+        const broad = sigTerms(query)[0]; // domain anchor (first significant word, e.g. "mcp"), NOT a generic long token like "server" that floods the pool
         const pools = await Promise.all([
-          smartFetch(query, { type: 'skill', limit: '8' }).then((r) => r.rows),
-          broad && broad !== query ? fetchListings({ type: 'skill', q: broad, limit: '8' }) : Promise.resolve([]),
+          smartFetch(query, { type: 'skill', limit: '10' }).then((r) => r.rows),
+          broad && broad !== query ? fetchListings({ type: 'skill', q: broad, limit: '10' }) : Promise.resolve([]),
         ]);
         const seen = new Set();
         const cand = pools.flat().filter((r) => r && !seen.has(r.id) && seen.add(r.id));
         const loadable = cand.filter((r) => isLoadableRepo(r.repo));
-        row = pickRelevant(loadable.length ? loadable : cand, query);
-        id = row?.id;
+        const ranked = rankCandidates(loadable.length ? loadable : cand, query, context, repoCats);
+        if (!ranked.length) return { content: [{ type: 'text', text: `No skill matched "${query}". Try search_skillselion with a shorter query, then load_skill by id.` }] };
+        row = ranked[0].row;
+        alternates = ranked.slice(1, 3);
+        id = row.id;
       }
-      if (!id) return { content: [{ type: 'text', text: query
-        ? `No skill matched "${query}". Run search_skillselion with a shorter query (e.g. "mcp server", "postgres", "testing") to find a skill id, then call load_skill with that id.`
-        : 'Provide a skill `id` (from search_skillselion) or a `query`.' }] };
       const m = String(id).match(/^skill:([^#]+)#(.+)$/);
       const repo = m ? m[1] : row?.repo;
       const slug = m ? m[2] : '';
       if (!repo) return { content: [{ type: 'text', text: `Could not resolve a GitHub repo for "${id}".` }] };
+
+      const altNote = alternates.length
+        ? `\n\n## Other candidates (call load_skill with the id to switch)\n${alternates.map((a) => `- \`${a.row.id}\` — ${a.why}`).join('\n')}`
+        : '';
+      const depWarn = (deps) => {
+        if (!deps.tools.length && !deps.needsSecret) return '';
+        const needs = [...deps.tools, deps.needsSecret ? 'an API key/secret' : null].filter(Boolean).join(', ');
+        const conflict = /\bno[ -]?(new )?dep|without installing|don'?t add/i.test(context || '');
+        return `\n\n⚠ Heads-up — this skill appears to require: ${needs}.${conflict ? ' You flagged no new deps, so it may not fit — consider an alternate above.' : ' If your project can’t add those, skip it or pick an alternate above.'}`;
+      };
 
       const loaded = await loadFullSkill(repo, slug);
       if (loaded) {
@@ -301,14 +332,14 @@ async function runServer() {
           : '## Bundled files: none - this skill is just its SKILL.md.';
         const body = loaded.skillMd.length > 14000 ? loaded.skillMd.slice(0, 14000) + `\n\n…(truncated - full file at ${loaded.tmpDir}/SKILL.md)` : loaded.skillMd;
         return { content: [{ type: 'text', text:
-          `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${loaded.tmpDir}\n\nFOLLOW these instructions for the current task, like an installed skill:\n\n## SKILL.md\n${body}\n\n${filesNote}` }] };
+          `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${loaded.tmpDir}\n\nFOLLOW these instructions for the current task, like an installed skill (verify against your project's real constraints):\n\n## SKILL.md\n${body}\n\n${filesNote}${depWarn(detectDeps(loaded.skillMd))}${altNote}` }] };
       }
 
       // fallback: just the SKILL.md text (e.g. GitHub tree API rate-limited)
       const got = await fetchSkillContent(repo, slug);
       if (!got) return { content: [{ type: 'text', text: `Couldn't load "${id}". Install it instead: npx skills add https://github.com/${repo}${slug ? ` --skill ${slug}` : ''}` }] };
       const body = got.content.length > 12000 ? got.content.slice(0, 12000) + '\n\n…(truncated - see ' + got.url + ')' : got.content;
-      return { content: [{ type: 'text', text: `# Skill: ${slug || repo}\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}` }] };
+      return { content: [{ type: 'text', text: `# Skill: ${slug || repo}\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}${depWarn(detectDeps(got.content))}${altNote}` }] };
     },
   );
 
@@ -353,10 +384,10 @@ const DEFAULT_CONFIG = { packs: [{ key: 'popular', count: 10, categories: null }
 const PRIMING_DIRECTIVE = [
   'You have the **Skillselion MCP** - on-demand access to thousands of community-vetted Claude Code skills (each a real SKILL.md + bundled scripts/references), ranked by real installs.',
   '',
-  'The moment a task could match a skill - writing tests, frontend/UI, an API or database, infra, a specific framework, anything a skill likely covers - call load_skill("<the task>") and FOLLOW the loaded skill BEFORE writing code or "best practices" from memory. A proven skill beats improvising.',
-  'Do not rationalize past it ("I already know this" / "it is a simple task" / "I will just do it directly"): if a skill might cover the task, load it first. It is read-only and cheap - ignore it if it does not fit.',
+  'When a task is in a domain a skill likely covers - writing tests, frontend/UI, an API or database, infra, a specific framework - and a proven recipe would beat improvising (most valuable in less-familiar or fast-moving territory), call load_skill: pass your task as `query` and your stack + constraints as `context` (required). FOLLOW the loaded skill instead of reciting "best practices" from memory.',
+  'load_skill returns the best match PLUS runner-up candidates and flags heavy dependencies - pick deliberately, verify against your project, and ignore a skill that does not fit.',
 ];
-const PRIMING_FOOTER = 'load_skill(query | id) searches + loads in one step · search_skillselion(query) browses · top_skillselion lists the best.';
+const PRIMING_FOOTER = 'load_skill(query, context) searches + loads + shows alternates · search_skillselion(query) browses · top_skillselion lists the best.';
 
 // These three are PURE (only reference injected consts + node builtins + globals)
 // so setup can embed them verbatim into the hook via .toString() — single source
