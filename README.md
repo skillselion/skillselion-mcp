@@ -28,8 +28,10 @@
 </p>
 
 <p align="center">
-  <img src="./assets/demo.svg" alt="search_skillselion demo" width="92%">
+  <img src="./assets/demo.gif" alt="Skillselion MCP: search the live catalog, then load_skill materializes the real skill into a temp folder" width="92%">
 </p>
+
+<p align="center"><sub>Real run against the live catalog: <code>search_skillselion</code> → <code>load_skill</code> pulls the skill's real <code>SKILL.md</code> + bundled files into a temp folder → your agent follows it like an installed skill.</sub></p>
 
 ---
 
