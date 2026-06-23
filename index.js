@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.5.3';
+const VERSION = '0.6.0';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -132,7 +132,14 @@ const STOP = new Set(['build', 'building', 'built', 'create', 'creating', 'make'
   'speed', 'fix', 'fixing', 'across', 'into', 'new', 'one', 'exposes', 'follow',
   // Short filler words that must never become the broad-pool anchor (e.g. "set
   // UP a stripe flow" -> anchoring on "up" floods the pool with junk).
-  'up', 'go', 'ok', 'comprehensive', 'application', 'applications', 'app', 'apps']);
+  'up', 'go', 'ok', 'comprehensive', 'application', 'applications', 'app', 'apps',
+  // Generic question / conversational words. They aren't domain signal but DO
+  // collide with skill names (e.g. "WHAT is the weather" keyword-matching a
+  // "what-context-needed" skill), which wrongly clears the relevance floor for
+  // off-topic chit-chat. Dropping them lets such queries floor correctly.
+  'what', 'when', 'where', 'why', 'which', 'who', 'whom', 'whose', 'is', 'are',
+  'was', 'were', 'be', 'can', 'could', 'should', 'would', 'will', 'like', 'about',
+  'today', 'now', 'me', 'you', 'they', 'them', 'people', 'someone']);
 function queryVariants(q) {
   const toks = String(q).toLowerCase().split(/[^a-z0-9+#.]+/i).filter(Boolean);
   const sig = toks.filter((t) => !STOP.has(t));
@@ -204,7 +211,13 @@ const sigTerms = (s) => String(s || '').toLowerCase().split(/[^a-z0-9+#.]+/i).fi
  *  + the current repo's stack. Returns the sorted list with a score and a short
  *  "why" per row, so load_skill can show the agent real options (not a silent,
  *  black-box single pick) and pick a canonical match over an obscure one. */
-function rankCandidates(rows, query, context, repoCats) {
+// Max cosine distance (pgvector `<=>`, 0=identical … 2=opposite) for a semantic
+// hit to count as a real topical match that clears the relevance floor. A
+// nonsense query ("write a haiku") still has a nearest neighbour, but a DISTANT
+// one — this threshold rejects those while keeping genuine concept matches
+// (calibrated against the eval: real matches land ~0.3-0.55, junk ~0.6+).
+const SEM_DIST_MAX = 0.58;
+function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
   const qTerms = sigTerms(query);
   const cTerms = sigTerms(context).slice(0, 16);
   return rows.map((r) => {
@@ -223,16 +236,30 @@ function rankCandidates(rows, query, context, repoCats) {
     const cStrong = cTerms.filter((t) => strong.includes(t)).length;
     const repoBoost = repoCats.includes(r.category) ? 1 : 0;
     const pop = Math.log10((r.installs || 0) + (r.stars || 0) + 1);
+    // Semantic signal: the catalog returns a meaning-ranked pool (nearest-first)
+    // for the same query. A row's rank there is a concept match even when it
+    // shares NO keyword with the query - the recall the keyword pools can't
+    // reach. Decays with rank; top-5 also counts as a "semantic strong" hit so
+    // the relevance floor trusts it (see the floor check in load_skill).
+    const sem = semInfo.get(r.id);
+    const semIdx = sem ? sem.rank : -1;
+    const semDist = sem ? sem.distance : null;
+    const semBoost = semIdx >= 0 ? Math.max(0, 5 - semIdx * 0.5) : 0;
+    // "Strong" (floor-clearing) only when the match is BOTH highly ranked AND
+    // genuinely close — distance gating is what stops nonsense queries (whose
+    // nearest neighbour is far) from loading junk.
+    const semStrong = semIdx >= 0 && semIdx < 5 && semDist != null && semDist <= SEM_DIST_MAX;
     // A strong (curated-field) query hit outweighs a weak one, so a topically
-    // on-point skill outranks a merely-popular one that collides in prose.
-    const score = qStrong * 4 + (qHit.length - qStrong) * 1 + cHit * 1 + repoBoost * 2 + pop;
+    // on-point skill outranks a merely-popular one that collides in prose. The
+    // semantic boost lets a concept match compete with a keyword match.
+    const score = qStrong * 4 + (qHit.length - qStrong) * 1 + cHit * 1 + repoBoost * 2 + semBoost + pop;
     const why = [
-      qHit.length ? `matches ${qHit.slice(0, 3).join('/')}` : null,
+      qHit.length ? `matches ${qHit.slice(0, 3).join('/')}` : (semStrong ? 'semantic match' : null),
       r.category,
       r.installs ? `${r.installs.toLocaleString()} installs` : (r.stars ? `★${r.stars}` : null),
       repoBoost ? 'fits this repo' : null,
     ].filter(Boolean).join(' · ');
-    return { row: r, score, why, qHitLen: qHit.length, cHit, qStrong, cStrong };
+    return { row: r, score, why, qHitLen: qHit.length, cHit, qStrong, cStrong, semStrong };
   }).sort((a, b) => b.score - a.score);
 }
 
@@ -369,14 +396,25 @@ async function runServer() {
         // skill competes with an obscure match, then rank by query + your context
         // + the current repo's stack - and surface the runners-up too.
         const broad = sigTerms(query)[0]; // domain anchor (first significant word, e.g. "mcp"), NOT a generic long token like "server" that floods the pool
+        // Three pools, merged + de-duped: (1) keyword on the full query, (2) keyword
+        // on the domain anchor, (3) SEMANTIC - the catalog's embedding-ranked pool
+        // for the same query. (3) is the recall fix: it surfaces concept matches
+        // the keyword pools never fetch (e.g. a "pub/sub" skill for a "LISTEN/NOTIFY"
+        // query). Degrades safely: if the API has no embeddings, `semantic=` falls
+        // back to a keyword search server-side, so this is at worst another keyword pool.
         const pools = await Promise.all([
           smartFetch(query, { type: 'skill', limit: '10' }).then((r) => r.rows).catch(() => []),
           broad && broad !== query ? fetchListings({ type: 'skill', q: broad, limit: '10' }).catch(() => []) : Promise.resolve([]),
+          fetchListings({ type: 'skill', semantic: query, limit: '10' }).catch(() => []),
         ]);
+        // The semantic pool comes back nearest-first with a cosine distance per
+        // row; capture rank + distance so rankCandidates can boost concept matches
+        // and the floor can trust only genuinely-close ones.
+        const semInfo = new Map((pools[2] || []).map((r, i) => [r.id, { rank: i, distance: r.semanticDistance }]));
         const seen = new Set();
         const cand = pools.flat().filter((r) => r && !seen.has(r.id) && seen.add(r.id));
         const loadable = cand.filter((r) => isLoadableRepo(r.repo));
-        const ranked = rankCandidates(loadable.length ? loadable : cand, query, context, repoCats);
+        const ranked = rankCandidates(loadable.length ? loadable : cand, query, context, repoCats, semInfo);
         if (!ranked.length) return { content: [{ type: 'text', text: `No skill matched "${query}". Try search_skillselion with a shorter query, then load_skill by id.` }] };
         // Relevance floor: the top pick must share a real topical term with a
         // CURATED field (name/tool/highlights/category) - a hit only in the repo
@@ -387,7 +425,10 @@ async function runServer() {
         // Key off the QUERY (the task) only: context is the agent's situation and
         // is full of generic words ("code", "next.js app") that strong-match
         // almost anything, so it must not rescue a task with no topical match.
-        if (ranked[0].qStrong === 0) {
+        // A strong SEMANTIC match (top-5 of the embedding pool) also clears the
+        // floor: that's a real concept match even with zero shared keywords - the
+        // whole point of adding semantic recall.
+        if (ranked[0].qStrong === 0 && !ranked[0].semStrong) {
           recordDemand({ query, context, matched: false, topScore: ranked[0].score });
           const near = ranked.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
           return { content: [{ type: 'text', text:

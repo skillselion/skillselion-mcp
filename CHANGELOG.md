@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0
+
+### Added
+- **Hybrid semantic matching for `load_skill`.** Alongside the two keyword pools, `load_skill` now
+  pulls a third pool from the catalog's new embedding-ranked `semantic=` search, so it surfaces
+  concept matches that share no keyword with the query (e.g. a "pub/sub" skill for a "Postgres
+  LISTEN/NOTIFY" task) - the recall the keyword pools can't reach. `rankCandidates` blends a
+  rank-decayed semantic boost into the score, and a strong semantic match (top-5 of the embedding
+  pool) clears the relevance floor.
+- Degrades safely: if the catalog has no embeddings configured, `semantic=` falls back to a keyword
+  search server-side, so behavior is unchanged. No new dependency (fetch-based).
+
 ## 0.5.3
 
 End-to-end hardening pass (see `docs/feature-status.md` for the full verified surface).

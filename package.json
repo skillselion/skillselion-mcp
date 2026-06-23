@@ -1,6 +1,6 @@
 {
   "name": "skillselion-mcp",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "description": "MCP server that gives your coding agent on-demand access to thousands of community-vetted Claude Code skills - search Skillselion and load_skill a real SKILL.md (plus its scripts/refs) mid-task. Ranked by installs + GitHub stars. Works with Claude Code, Cursor, Codex & any MCP client.",
   "type": "module",
   "bin": {
