@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.7.0
+
+### Changed
+- **`load_skill` now materializes from Skillselion's own skill-files store** (`GET /api/skills/:id/files`)
+  before falling back to GitHub. The old loader guessed 4 conventional GitHub paths and 404'd on repos
+  with non-standard layouts (e.g. skills nested under `plugins/`), so the right skill was picked but
+  couldn't be loaded. Pulling the real upstream content by id fixes that. Measured on a 228-case
+  catalog-validated eval: hit-rate **72% → 81%**, "couldn't load" failures **24 → 0**. The catalog
+  fetch is capped (~25s) and falls back to GitHub so a cold lazy-backfill never hangs the agent.
+- **Ranking + relevance-floor tuned via grid-search** over the 228-case set: semantic matches weigh
+  more relative to keyword hits, and the floor requires a genuinely close semantic match (or ≥2
+  curated keyword hits) so off-topic queries are refused. All knobs are env-overridable
+  (`SK_SEM_WEIGHT`, `SK_QSTRONG_WEIGHT`, `SK_SEM_DIST_MAX`, `SK_SEM_FLOOR_RANK`, `SK_FLOOR_MIN_QSTRONG`).
+
+### Added
+- `test/eval.mjs` labeled relevance harness + `test/eval-cases.json` (228 catalog-validated cases),
+  and `test/embed-variants.mjs` (offline A/B/C embedding-text experiment).
+
+## 0.6.1
+
+### Changed
+- **Privacy: the demand signal no longer transmits your `context`.** `load_skill` used to POST the
+  `context` string you pass (your task, stack and constraints) to the catalog's demand endpoint. It
+  now sends only the search query, whether it matched, and the id of the skill it loaded.
+- **New `DO_NOT_TRACK` / `SK_NO_DEMAND` opt-out.** Set either env var to disable the demand signal
+  entirely.
+- **Docs: corrected the README privacy note.** The server makes one best-effort `POST` to record
+  demand, so the old "GET-only / no telemetry" wording was inaccurate; the note now states exactly
+  what is read locally and what is sent.
+
 ## 0.6.0
 
 ### Added

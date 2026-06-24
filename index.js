@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.6.0';
+const VERSION = '0.7.0';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -176,13 +176,20 @@ async function smartFetch(query, params) {
 // ingestion flywheel). Best-effort - never awaited, never throws, short timeout;
 // the tool works identically if this endpoint is down.
 function recordDemand(sig) {
+  // Privacy: honor DO_NOT_TRACK / SK_NO_DEMAND (either one disables the demand
+  // signal entirely), and never transmit the caller's `context` (their task,
+  // stack and constraints). Only the query, the match outcome and the picked
+  // skill id ever leave the machine.
+  if (process.env.DO_NOT_TRACK || process.env.SK_NO_DEMAND) return;
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 2500);
+    const safe = { ...sig };
+    delete safe.context;
     fetch(`${API}/mcp/demand`, {
       method: 'POST',
       headers: { ...CLIENT_HEADERS, 'content-type': 'application/json' },
-      body: JSON.stringify({ ...sig, client: CLIENT_HEADERS['user-agent'] }),
+      body: JSON.stringify({ ...safe, client: CLIENT_HEADERS['user-agent'] }),
       signal: ctl.signal,
     }).catch(() => {}).finally(() => clearTimeout(t));
   } catch { /* never break the tool */ }
@@ -216,7 +223,21 @@ const sigTerms = (s) => String(s || '').toLowerCase().split(/[^a-z0-9+#.]+/i).fi
 // nonsense query ("write a haiku") still has a nearest neighbour, but a DISTANT
 // one — this threshold rejects those while keeping genuine concept matches
 // (calibrated against the eval: real matches land ~0.3-0.55, junk ~0.6+).
-const SEM_DIST_MAX = 0.58;
+// Tunable knobs (env-overridable so the eval harness can grid-search them; the
+// defaults are the shipped values). SK_SEM_DIST_MAX = floor distance gate;
+// SK_SEM_WEIGHT = semantic boost cap (decays over the top-10); SK_QSTRONG_WEIGHT
+// = weight of a curated-field keyword hit; SK_SEM_FLOOR_RANK = how many top
+// semantic ranks can clear the floor.
+const numEnv = (k, d) => { const v = Number(process.env[k]); return Number.isFinite(v) ? v : d; };
+// Defaults tuned via grid-search over a 228-case catalog-validated eval set
+// (2026-06-23): semantic weight 9 + keyword weight 3 lets meaning dominate
+// false-friend keyword hits; floor gate (≥2 keyword hits OR a ≤0.50-distance
+// semantic match) plugs off-topic "adjacent" queries. Lifted 64.0% → 71.9%.
+const SEM_DIST_MAX = numEnv('SK_SEM_DIST_MAX', 0.50);
+const SEM_WEIGHT = numEnv('SK_SEM_WEIGHT', 9);
+const QSTRONG_WEIGHT = numEnv('SK_QSTRONG_WEIGHT', 3);
+const SEM_FLOOR_RANK = numEnv('SK_SEM_FLOOR_RANK', 5);
+const FLOOR_MIN_QSTRONG = numEnv('SK_FLOOR_MIN_QSTRONG', 2);
 function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
   const qTerms = sigTerms(query);
   const cTerms = sigTerms(context).slice(0, 16);
@@ -244,15 +265,15 @@ function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
     const sem = semInfo.get(r.id);
     const semIdx = sem ? sem.rank : -1;
     const semDist = sem ? sem.distance : null;
-    const semBoost = semIdx >= 0 ? Math.max(0, 5 - semIdx * 0.5) : 0;
+    const semBoost = semIdx >= 0 ? Math.max(0, SEM_WEIGHT * (1 - semIdx / 10)) : 0;
     // "Strong" (floor-clearing) only when the match is BOTH highly ranked AND
     // genuinely close — distance gating is what stops nonsense queries (whose
     // nearest neighbour is far) from loading junk.
-    const semStrong = semIdx >= 0 && semIdx < 5 && semDist != null && semDist <= SEM_DIST_MAX;
+    const semStrong = semIdx >= 0 && semIdx < SEM_FLOOR_RANK && semDist != null && semDist <= SEM_DIST_MAX;
     // A strong (curated-field) query hit outweighs a weak one, so a topically
     // on-point skill outranks a merely-popular one that collides in prose. The
     // semantic boost lets a concept match compete with a keyword match.
-    const score = qStrong * 4 + (qHit.length - qStrong) * 1 + cHit * 1 + repoBoost * 2 + semBoost + pop;
+    const score = qStrong * QSTRONG_WEIGHT + (qHit.length - qStrong) * 1 + cHit * 1 + repoBoost * 2 + semBoost + pop;
     const why = [
       qHit.length ? `matches ${qHit.slice(0, 3).join('/')}` : (semStrong ? 'semantic match' : null),
       r.category,
@@ -353,6 +374,54 @@ async function loadFullSkill(repo, slug) {
   return null;
 }
 
+/** Load a skill's full bundle from Skillselion's own SkillFile store
+ *  (GET /api/skills/:id/files) — the RELIABLE path: it serves the real upstream
+ *  (skills.sh) content regardless of the GitHub repo layout, and lazily backfills
+ *  on a miss. This avoids the 4-path GitHub guessing in loadFullSkill that 404s on
+ *  repos like wshobson/agents (skills under plugins/). Same return shape; the
+ *  caller falls back to GitHub if this returns null. */
+async function loadSkillFromCatalog(id) {
+  try {
+    // The endpoint lazy-backfills from skills.sh on a cache miss, which can be
+    // slow; cap the wait so a cold skill falls back to GitHub instead of hanging
+    // the agent (a warm skill returns in well under this). Subsequent loads of the
+    // same skill are served from the persisted store, so the cost is one-time.
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 25_000);
+    let res;
+    try { res = await fetch(`${SITE}/api/skills/${encodeURIComponent(id)}/files`, { headers: CLIENT_HEADERS, signal: ctl.signal }); }
+    finally { clearTimeout(t); }
+    if (!res.ok) return null;
+    const data = await res.json();
+    const files = (Array.isArray(data.files) ? data.files : [])
+      // text bundle only; skip anything with a traversal/absolute path.
+      .filter((f) => f && typeof f.path === 'string' && typeof f.contents === 'string'
+        && !f.path.includes('..') && !f.path.startsWith('/'));
+    const mdEntry = files.find((f) => /(^|\/)SKILL\.md$/i.test(f.path));
+    if (!mdEntry || mdEntry.contents.trim().length < 30) return null;
+    // SKILL.md may sit in a subdir; strip that prefix so bundled files stay relative.
+    const skillDir = mdEntry.path.includes('/') ? mdEntry.path.slice(0, mdEntry.path.lastIndexOf('/')) : '';
+    const prefix = skillDir ? skillDir + '/' : '';
+    const folder = String(id).replace(/[^\w.-]/g, '_').slice(0, 120);
+    const tmpDir = join(tmpdir(), 'skillselion', folder);
+    mkdirSync(tmpDir, { recursive: true });
+    let skillMd = '';
+    const manifest = [];
+    for (const f of files.slice(0, 100)) {
+      const rel = skillDir && f.path.startsWith(prefix) ? f.path.slice(prefix.length) : f.path;
+      try {
+        const dest = join(tmpDir, rel);
+        mkdirSync(dirname(dest), { recursive: true });
+        writeFileSync(dest, f.contents);
+        if (rel.toLowerCase() === 'skill.md') skillMd = f.contents;
+        else manifest.push(rel);
+      } catch { /* skip this file */ }
+    }
+    if (skillMd) return { skillMd, tmpDir, manifest, skillDir, source: data.source };
+  } catch { /* fall through to GitHub */ }
+  return null;
+}
+
 // ---- mode: MCP server -------------------------------------------------------
 async function runServer() {
   // Append a local-skill gap-targeting line so even no-hook clients are told to
@@ -428,7 +497,11 @@ async function runServer() {
         // A strong SEMANTIC match (top-5 of the embedding pool) also clears the
         // floor: that's a real concept match even with zero shared keywords - the
         // whole point of adding semantic recall.
-        if (ranked[0].qStrong === 0 && !ranked[0].semStrong) {
+        // FLOOR_MIN_QSTRONG (default 1) = curated keyword hits required to clear
+        // the floor on keyword alone. At 1, a single generic word (e.g. "DBA" in
+        // "best wine for DBA retirement") clears it; raise to 2 so an off-topic
+        // query needs ≥2 real topical terms OR a close semantic match to load.
+        if (ranked[0].qStrong < FLOOR_MIN_QSTRONG && !ranked[0].semStrong) {
           recordDemand({ query, context, matched: false, topScore: ranked[0].score });
           const near = ranked.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
           return { content: [{ type: 'text', text:
@@ -466,9 +539,10 @@ async function runServer() {
         const mm = String(cid).match(/^skill:([^#]+)#(.+)$/);
         const repo = mm ? mm[1] : picks[k].row?.repo;
         const slug = mm ? mm[2] : '';
-        if (!repo) continue;
-        lastRepo = repo; lastSlug = slug;
-        const loaded = await loadFullSkill(repo, slug);
+        if (repo) { lastRepo = repo; lastSlug = slug; }
+        // Try Skillselion's own SkillFile store first (reliable, any repo layout),
+        // then fall back to fetching from GitHub by guessing conventional paths.
+        const loaded = (await loadSkillFromCatalog(cid)) || (repo ? await loadFullSkill(repo, slug) : null);
         if (loaded) {
           const filesNote = loaded.manifest.length
             ? `## Bundled files (materialized to ${loaded.tmpDir})\n${loaded.manifest.map((f) => '- ' + f).join('\n')}\n\nRead or run these from that folder exactly as the SKILL.md directs (e.g. \`python ${loaded.tmpDir}/scripts/<name>.py\`, or read \`${loaded.tmpDir}/references/<name>.md\`).`

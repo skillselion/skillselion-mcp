@@ -14,6 +14,7 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { readFileSync, existsSync } from 'node:fs';
 
 const txt = (r) => (r.content || []).map((c) => c.text || '').join('\n');
 const firstLine = (s) => s.split('\n').find((l) => l.trim()) || '';
@@ -22,7 +23,12 @@ const isFloor = (s) => /^No skill on Skillselion clearly matches/.test(s.trim())
 // expect: regex the loaded skill's first line (`# Skill loaded: <slug> (<repo>)`)
 // must match. floor: true => the query SHOULD return the no-match floor.
 // semantic: true => a keyword-hostile query where embeddings should help most.
-const CASES = [
+// An expanded, catalog-validated case set (test/eval-cases.json) overrides the
+// built-in set when present. JSON shape per case: {query, context, expect (regex
+// source string), floor?, semantic?}. Lets a workflow grow the eval without
+// editing this file. Override path via EVAL_CASES_FILE.
+const CASES_FILE = process.env.EVAL_CASES_FILE || new URL('./eval-cases.json', import.meta.url).pathname;
+const BUILTIN_CASES = [
   // --- clean keyword cases (should already pass; guard against regressions) ---
   { query: 'playwright e2e tests', context: 'Next.js app, end-to-end testing', expect: /playwright|e2e|test|webapp/i },
   { query: 'build an MCP server in python', context: 'python, model context protocol', expect: /mcp|server/i },
@@ -48,11 +54,32 @@ const CASES = [
   { query: 'what is the weather like in tokyo today', context: 'casual question, no code', floor: true },
 ];
 
+// Load expanded cases from JSON if available; convert `expect` strings → RegExp.
+let CASES = BUILTIN_CASES;
+if (existsSync(CASES_FILE)) {
+  try {
+    const raw = JSON.parse(readFileSync(CASES_FILE, 'utf8'));
+    const arr = Array.isArray(raw) ? raw : raw.cases;
+    CASES = arr.map((c) => ({ ...c, expect: c.expect ? new RegExp(c.expect, 'i') : undefined }));
+    console.log(`(loaded ${CASES.length} cases from ${CASES_FILE})`);
+  } catch (e) {
+    console.log(`(failed to load ${CASES_FILE}: ${e.message}; using built-in ${BUILTIN_CASES.length})`);
+  }
+}
+
 async function runPass(client) {
   let hits = 0;
   const misses = [];
   for (const c of CASES) {
-    const out = txt(await client.callTool({ name: 'load_skill', arguments: { query: c.query, context: c.context } }));
+    let out;
+    try {
+      // Generous timeout: a cold skill triggers a one-time lazy backfill from
+      // skills.sh on the server, which can exceed the SDK's 60s default.
+      out = txt(await client.callTool({ name: 'load_skill', arguments: { query: c.query, context: c.context } }, undefined, { timeout: 120_000 }));
+    } catch (e) {
+      misses.push(`${c.semantic ? '[sem] ' : c.floor ? '[floor] ' : ''}"${c.query}" -> ERROR ${e.message?.slice(0, 40)}`);
+      continue;
+    }
     let ok;
     if (c.floor) ok = isFloor(out);
     else ok = !isFloor(out) && /# Skill/.test(out) && c.expect.test(firstLine(out));
