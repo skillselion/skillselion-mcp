@@ -52,6 +52,55 @@ export function scrubQuery(raw) {
     .slice(0, 200);
 }
 
+// --- load_skill response builders (progressive disclosure) ---
+export function skillOneLiner(skillMd) {
+  const s = String(skillMd || '');
+  const fm = s.match(/^---\n([\s\S]*?)\n---/);
+  if (fm) {
+    const d = fm[1].match(/^description:\s*(.+)$/m);
+    if (d) return d[1].replace(/^["'>|]+|["']+$/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  }
+  const body = fm ? s.slice(fm[0].length) : s;
+  for (const line of body.split('\n')) {
+    const t = line.trim();
+    if (t && !t.startsWith('#') && !t.startsWith('---')) return t.replace(/\s+/g, ' ').slice(0, 200);
+  }
+  return '';
+}
+
+export function clipSkillMd(skillMd, budget) {
+  const s = String(skillMd || '');
+  if (s.length <= budget) return { text: s, clipped: false, remaining: 0 };
+  const head = s.slice(0, budget);
+  const lastSec = Math.max(head.lastIndexOf('\n## '), head.lastIndexOf('\n### '));
+  const cut = lastSec > budget * 0.4 ? lastSec : (head.lastIndexOf('\n') > 0 ? head.lastIndexOf('\n') : budget);
+  const kept = s.slice(0, cut);
+  const remaining = (s.slice(cut).match(/\n#{2,3} /g) || []).length;
+  return { text: kept, clipped: true, remaining };
+}
+
+export function filePurpose(relPath, content) {
+  if (!/\.md$/i.test(String(relPath)) || !content) return '';
+  for (const line of String(content).split('\n')) {
+    const t = line.trim();
+    if (t.startsWith('# ')) return t.replace(/^#+\s*/, '').slice(0, 80);
+    if (t && !t.startsWith('---') && !t.startsWith('#')) return t.slice(0, 80);
+  }
+  return '';
+}
+
+export function buildFilesNote(tmpDir, files) {
+  if (!files || !files.length) return '## Bundled files: none - this skill is just its SKILL.md.';
+  const lines = files.map((f) => `- ${f.rel}${f.purpose ? ' - ' + f.purpose : ''}`).join('\n');
+  return `## Bundled files (in ${tmpDir})\n${lines}\n\nRead or run these from that folder on demand, exactly as the SKILL.md directs.`;
+}
+
+export function buildCard({ slug, repo, tmpDir, oneLiner }) {
+  return `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${tmpDir}` +
+    (oneLiner ? `\n${oneLiner}` : '') +
+    `\n\nFOLLOW these instructions for the current task, like an installed skill (verify against your project's real constraints):`;
+}
+
 // Server `instructions` — sent in the MCP initialize handshake, so EVERY client
 // (Claude Code, Cursor, Codex, …) that surfaces it gets this guidance with no
 // hook/install required. Per MCP best practice it's a concise workflow "user
