@@ -32,6 +32,26 @@ const CLIENT_HEADERS = {
   'x-skillselion-client': 'mcp',
 };
 
+// Client-side query scrub - strips secrets/PII before the (fire-and-forget)
+// demand signal leaves the machine. Mirrors the server's scrub.ts EXACTLY
+// (apps/api/src/mcp/scrub.ts) so both ends agree; the server scrubs again as
+// defense-in-depth. TOKEN uses {4,} to match the server (a {8,} variant fails
+// its own test). Never touches matching - only the outbound signal.
+const _EMAIL = /\b[\w.+-]+@[\w-]+\.[\w.-]+\b/g;
+const _TOKEN = /\b(?:sk-|gh[pousr]_|xox[baprs]-|Bearer\s+)[\w-]{4,}\b/gi;
+const _PATH = /(?:\/[\w.-]+){2,}/g;
+const _FENCE = /```[\s\S]*?```|`[^`]*`/g;
+export function scrubQuery(raw) {
+  return String(raw ?? '')
+    .replace(_FENCE, ' ')
+    .replace(_EMAIL, ' ')
+    .replace(_TOKEN, ' ')
+    .replace(_PATH, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
 // Server `instructions` — sent in the MCP initialize handshake, so EVERY client
 // (Claude Code, Cursor, Codex, …) that surfaces it gets this guidance with no
 // hook/install required. Per MCP best practice it's a concise workflow "user
@@ -186,6 +206,7 @@ function recordDemand(sig) {
     const t = setTimeout(() => ctl.abort(), 2500);
     const safe = { ...sig };
     delete safe.context;
+    if (safe.query) safe.query = scrubQuery(safe.query);
     fetch(`${API}/mcp/demand`, {
       method: 'POST',
       headers: { ...CLIENT_HEADERS, 'content-type': 'application/json' },
@@ -280,7 +301,7 @@ function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
       r.installs ? `${r.installs.toLocaleString()} installs` : (r.stars ? `★${r.stars}` : null),
       repoBoost ? 'fits this repo' : null,
     ].filter(Boolean).join(' · ');
-    return { row: r, score, why, qHitLen: qHit.length, cHit, qStrong, cStrong, semStrong };
+    return { row: r, score, why, qHitLen: qHit.length, cHit, qStrong, cStrong, semStrong, semanticDistance: semDist };
   }).sort((a, b) => b.score - a.score);
 }
 
@@ -511,7 +532,7 @@ async function runServer() {
         alternates = ranked.slice(1, 3);
         topScore = ranked[0].score;
         id = row.id;
-        picks = ranked.slice(0, 3).map((a) => ({ id: a.row.id, row: a.row, why: a.why }));
+        picks = ranked.slice(0, 3).map((a) => ({ id: a.row.id, row: a.row, why: a.why, semanticDistance: a.semanticDistance }));
       }
       // The ordered list we'll actually try to materialize: the ranked pick + its
       // runners-up (query path), or just the one explicit id. A top pick that
@@ -532,7 +553,7 @@ async function runServer() {
           : '';
       };
 
-      recordDemand({ query: query || picks[0].id, context, matched: true, skillId: picks[0].id, topScore });
+      recordDemand({ query: query || picks[0].id, context, matched: true, skillId: picks[0].id, topScore, semanticDistance: picks[0].semanticDistance ?? undefined });
       let lastRepo = '', lastSlug = '';
       for (let k = 0; k < picks.length; k++) {
         const cid = picks[k].id;
