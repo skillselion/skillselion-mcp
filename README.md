@@ -48,7 +48,7 @@ Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin 
 | 📥 **`load_skill`** | **The dynamic load.** Pulls a skill's real **`SKILL.md`** into context **and materializes its whole directory** (scripts, references, templates) into a **temp folder**, so the agent uses it like an *installed* skill — read/run the bundled files included. Pass an `id` from search, or a `query`. |
 | 🏆 **`top_skillselion`** | The leaderboard — "what are the best Claude Code skills / MCP servers right now." Skills rank by installs; MCP servers & marketplaces by GitHub stars. |
 
-> **Private by default.** To rank skills to your stack, it reads your installed-skill names and your project's `package.json` locally, and transmits none of that. The only data it sends is your **search query**, whether it matched, and the id of the skill it loaded, so the catalog learns which skills to add next. It never sends your code, your files, or the `context` you pass. Set `DO_NOT_TRACK=1` (or `SK_NO_DEMAND=1`) to disable that too. No auth, no secrets.
+> **Private by default.** To rank skills to your stack, it reads your installed-skill names and your project's `package.json` locally, and transmits none of that. The only data it sends is your **search query** (scrubbed of emails, tokens/keys and file paths, and capped at 200 chars), whether it matched, and the id of the skill it loaded, so the catalog learns which skills to add next. The signal carries no identity, IP, or client fingerprint. It never sends your code, your files, or the `context` you pass. Set `DO_NOT_TRACK=1` (or `SK_NO_DEMAND=1`) to disable that too. No auth, no secrets. Ranking can also be nudged by human-approved catalog "lessons" (fetched read-only) - never by your data.
 
 ## 🚀 Install
 
