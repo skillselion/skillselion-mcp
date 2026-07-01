@@ -116,6 +116,76 @@ export function buildCard({ slug, repo, tmpDir, oneLiner, fileCount = 0, depNeed
   return head + tl.join('\n');
 }
 
+// --- synthesize_skills pure helpers (agent-side multi-skill synthesis) ---
+// Pull actionable RULE lines out of a SKILL.md: bullet / numbered lines and
+// explicit DO/DON'T directives, each tagged with its section heading. Skips
+// frontmatter, fenced code, and plain prose. Caps per-skill so no one skill
+// dominates the merged digest; clips each line so a runaway bullet can't blow
+// the budget. Pure + heuristic - no server LLM.
+export function extractRules(skillMd, opts = {}) {
+  const perSkill = Math.max(1, Number(opts.perSkill) || 12);
+  const MAXLEN = 140;
+  let s = String(skillMd || '')
+    .replace(/^---\n[\s\S]*?\n---\n?/, '')   // frontmatter
+    .replace(/```[\s\S]*?```/g, '');          // fenced code
+  const out = [];
+  let heading = '';
+  for (const raw of s.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const h = line.match(/^#{2,3}\s+(.+)$/);
+    if (h) { heading = h[1].replace(/[:#]+\s*$/, '').replace(/\s+/g, ' ').trim().slice(0, 80); continue; }
+    const b = line.match(/^(?:[-*]|\d+\.)\s+(.+)$/);
+    const d = !b && line.match(/^(DO NOT|DON'?T|DO|NEVER|ALWAYS|AVOID)\b[:\s-]+(.+)$/i);
+    let text = b ? b[1] : (d ? `${d[1].toUpperCase()}: ${d[2]}` : null);
+    if (!text) continue;
+    text = text.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
+    if (text.length < 3) continue;
+    if (text.length > MAXLEN) text = text.slice(0, MAXLEN - 1).replace(/\s+\S*$/, '') + '…';
+    out.push({ text, heading });
+    if (out.length >= perSkill) break;
+  }
+  return out;
+}
+
+// Drop near-identical rule lines across skills (normalized compare: lowercase,
+// strip markdown + punctuation, collapse whitespace). Keeps the FIRST occurrence
+// and its provenance, so the best (rank-order-first) skill owns a shared rule.
+export function dedupeRules(rules) {
+  const seen = new Set();
+  const out = [];
+  for (const r of rules || []) {
+    const key = String(r.text || '').toLowerCase()
+      .replace(/[`*_]/g, '').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
+// Render the merged, provenance-tagged, budget-capped digest Claude receives.
+// First line format is stable (`🧬 Synthesized from N skills for "..."`) so it
+// never collides with the load_skill `# Skill loaded:` eval key.
+export function buildSynthesis({ query, sources, rules, budget = 4000 }) {
+  const q = scrubQuery(query);
+  const header = `🧬 Synthesized from ${sources.length} skills for "${q}"`;
+  const srcInline = sources.map((s) => `${s.slug} (${s.repo})`).join(' · ');
+  const srcPaths = sources.map((s) => `  ${s.slug} → ${s.tmpDir}`).join('\n');
+  const srcBlock = `Sources: ${srcInline} - full skills on disk:\n${srcPaths}`;
+  const kept = [];
+  let used = 0;
+  for (const r of rules || []) {
+    const line = `- [${r.slug}] ${r.text}`;
+    if (used + line.length + 1 > budget) break;
+    kept.push(line);
+    used += line.length + 1;
+  }
+  const rulesBlock = `## Merged rules (provenance-tagged, deduped across sources)\n${kept.join('\n')}`;
+  const footer = '📖 Synthesize these into ONE playbook for the task; cite the rule sources. The full SKILL.md + files for each source are on disk above - read any for detail.';
+  return [header, '', srcBlock, '', rulesBlock, '', footer].join('\n');
+}
+
 // Server `instructions` — sent in the MCP initialize handshake, so EVERY client
 // (Claude Code, Cursor, Codex, …) that surfaces it gets this guidance with no
 // hook/install required. Per MCP best practice it's a concise workflow "user
