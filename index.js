@@ -305,6 +305,33 @@ function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
   }).sort((a, b) => b.score - a.score);
 }
 
+// A promoted McpLesson biases ranking for the query shapes it names: a `prefer`
+// lesson lifts its listing above the relevance floor, a `block` lesson demotes
+// its listing below the floor. Query-shape gate = every significant token of the
+// shape must be present in the query, so a lesson only fires for the queries it
+// was written for. INERT when no lesson is active/matches (returns `ranked`
+// untouched) - prod ranking cannot drift until a human promotes a lesson.
+function _shapeMatches(query, shape) {
+  const q = ` ${String(query).toLowerCase()} `;
+  return String(shape).toLowerCase().split(/\s+/).filter((t) => t.length > 2).every((t) => q.includes(t));
+}
+export function applyLessons(query, ranked, lessons) {
+  if (!Array.isArray(lessons) || !lessons.length) return ranked;
+  const active = lessons.filter((l) => l.status === 'active' && _shapeMatches(query, l.queryShape));
+  if (!active.length) return ranked;
+  const prefer = new Set(active.map((l) => l.preferListingId).filter(Boolean));
+  const block = new Set(active.map((l) => l.blockListingId).filter(Boolean));
+  const idOf = (r) => (r && r.id != null ? r.id : (r && r.row ? r.row.id : undefined));
+  const adj = ranked.map((r) => {
+    let score = r.score;
+    const rid = idOf(r);
+    if (block.has(rid)) score -= 1000;
+    if (prefer.has(rid)) score += 1000;
+    return { ...r, score };
+  });
+  return adj.sort((x, y) => y.score - x.score);
+}
+
 /** Scan a SKILL.md for external dependencies an agent should know about BEFORE
  *  relying on it (the #1 ask from real agent feedback: a skill that needed the
  *  `belt` CLI wasted a load). Best-effort, content-based. */
@@ -506,6 +533,17 @@ async function runServer() {
         const loadable = cand.filter((r) => isLoadableRepo(r.repo));
         const ranked = rankCandidates(loadable.length ? loadable : cand, query, context, repoCats, semInfo);
         if (!ranked.length) return { content: [{ type: 'text', text: `No skill matched "${query}". Try search_skillselion with a shorter query, then load_skill by id.` }] };
+        // Bias the ranking with any human-promoted lessons for this query shape.
+        // Best-effort: on any failure lessons=[] and applyLessons is inert, so the
+        // ranking is exactly today's. Inert too when no active lesson matches.
+        let lessons = [];
+        try {
+          const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 2000);
+          const lr = await fetch(`${API}/mcp/lessons/active`, { headers: CLIENT_HEADERS, signal: ctl.signal });
+          clearTimeout(t);
+          if (lr.ok) lessons = await lr.json();
+        } catch { /* no lessons -> unchanged behavior */ }
+        const adjusted = applyLessons(query, ranked, lessons);
         // Relevance floor: the top pick must share a real topical term with a
         // CURATED field (name/tool/highlights/category) - a hit only in the repo
         // owner slug or free-text prose (e.g. "poem" inside owner "poemswe", or a
@@ -522,17 +560,17 @@ async function runServer() {
         // the floor on keyword alone. At 1, a single generic word (e.g. "DBA" in
         // "best wine for DBA retirement") clears it; raise to 2 so an off-topic
         // query needs ≥2 real topical terms OR a close semantic match to load.
-        if (ranked[0].qStrong < FLOOR_MIN_QSTRONG && !ranked[0].semStrong) {
-          recordDemand({ query, context, matched: false, topScore: ranked[0].score });
-          const near = ranked.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
+        if (adjusted[0].qStrong < FLOOR_MIN_QSTRONG && !adjusted[0].semStrong) {
+          recordDemand({ query, context, matched: false, topScore: adjusted[0].score });
+          const near = adjusted.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
           return { content: [{ type: 'text', text:
             `No skill on Skillselion clearly matches "${query}". The closest by popularity (${near}) don't match your task, so loading one likely won't help — proceed with your own approach, or call load_skill again with a more specific query / use search_skillselion to browse.` }] };
         }
-        row = ranked[0].row;
-        alternates = ranked.slice(1, 3);
-        topScore = ranked[0].score;
+        row = adjusted[0].row;
+        alternates = adjusted.slice(1, 3);
+        topScore = adjusted[0].score;
         id = row.id;
-        picks = ranked.slice(0, 3).map((a) => ({ id: a.row.id, row: a.row, why: a.why, semanticDistance: a.semanticDistance }));
+        picks = adjusted.slice(0, 3).map((a) => ({ id: a.row.id, row: a.row, why: a.why, semanticDistance: a.semanticDistance }));
       }
       // The ordered list we'll actually try to materialize: the ranked pick + its
       // runners-up (query path), or just the one explicit id. A top pick that
