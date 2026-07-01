@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2
+
+### Changed
+- Docs and packaging cleanup. No behavior change to the three tools.
+
 ## 0.8.1
 
 ### Changed
@@ -21,10 +26,6 @@
   (`GET /mcp/lessons/active`, best-effort, read-only) and lets a `prefer`/`block` lesson nudge a
   listing for the query shapes it names. Inert until a human promotes a lesson, so default ranking is
   unchanged - and it degrades to today's behavior if the fetch fails.
-- **Loop harness** (`loop/`): a self-play probe generator plus a bounded, sequential
-  probe → diagnose → eval-gated candidate loop. Low-risk block lessons auto-apply only when they do not
-  regress the 228-case eval; everything else queues `pending` for human review. Operator dry-run:
-  `node loop/run-loop.mjs` (prints a bucket histogram, writes nothing).
 
 ## 0.7.0
 

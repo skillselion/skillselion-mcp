@@ -159,7 +159,7 @@ node index.js    # speaks MCP over stdio
 
 ## ⭐ Like it?
 
-- **[Star this repo](https://github.com/skillselion/skillselion-mcp)** — it helps other builders find it.
+- **[Star this repo](https://github.com/skillselion/skillselion-mcp)** — it helps other developers find it.
 - **Browse the full catalog at [skillselion.com](https://skillselion.com)** — search thousands of skills, MCPs & marketplaces, ranked by real installs.
 - Found a great skill that's missing, or hit a bug? **[Open an issue](https://github.com/skillselion/skillselion-mcp/issues)** — PRs welcome.
 
@@ -168,5 +168,5 @@ node index.js    # speaks MCP over stdio
 [MIT](./LICENSE) © [Skillselion](https://skillselion.com)
 
 <p align="center">
-  <sub>Built for builders. Find the skill, not the noise. → <a href="https://skillselion.com">skillselion.com</a></sub>
+  <sub>Built for developers. Find the skill, not the noise. → <a href="https://skillselion.com">skillselion.com</a></sub>
 </p>
