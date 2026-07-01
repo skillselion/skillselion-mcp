@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
