@@ -614,6 +614,50 @@ async function loadSkillFromCatalog(id) {
   return null;
 }
 
+// Build the ranked, lesson-biased candidate pool for a query+context. Extracted
+// verbatim from load_skill so the tool stays a thin caller: widen the pool (three
+// merged, de-duped pools - keyword-on-full-query, keyword-on-domain-anchor, and
+// the catalog's SEMANTIC embedding pool), rank by query+context+repo, then bias
+// with any human-promoted lessons. Returns { adjusted } - the array
+// rankCandidates/applyLessons produce (each row has .row/.qStrong/.semStrong/
+// .semanticDistance/.score/.why), or an empty array when nothing is found. The
+// relevance-floor decision stays in load_skill, which reads adjusted[0].
+async function retrieveRankedSkills(query, context, repoCats) {
+  const broad = sigTerms(query)[0]; // domain anchor (first significant word, e.g. "mcp"), NOT a generic long token like "server" that floods the pool
+  // Three pools, merged + de-duped: (1) keyword on the full query, (2) keyword
+  // on the domain anchor, (3) SEMANTIC - the catalog's embedding-ranked pool
+  // for the same query. (3) is the recall fix: it surfaces concept matches
+  // the keyword pools never fetch (e.g. a "pub/sub" skill for a "LISTEN/NOTIFY"
+  // query). Degrades safely: if the API has no embeddings, `semantic=` falls
+  // back to a keyword search server-side, so this is at worst another keyword pool.
+  const pools = await Promise.all([
+    smartFetch(query, { type: 'skill', limit: '10' }).then((r) => r.rows).catch(() => []),
+    broad && broad !== query ? fetchListings({ type: 'skill', q: broad, limit: '10' }).catch(() => []) : Promise.resolve([]),
+    fetchListings({ type: 'skill', semantic: query, limit: '10' }).catch(() => []),
+  ]);
+  // The semantic pool comes back nearest-first with a cosine distance per
+  // row; capture rank + distance so rankCandidates can boost concept matches
+  // and the floor can trust only genuinely-close ones.
+  const semInfo = new Map((pools[2] || []).map((r, i) => [r.id, { rank: i, distance: r.semanticDistance }]));
+  const seen = new Set();
+  const cand = pools.flat().filter((r) => r && !seen.has(r.id) && seen.add(r.id));
+  const loadable = cand.filter((r) => isLoadableRepo(r.repo));
+  const ranked = rankCandidates(loadable.length ? loadable : cand, query, context, repoCats, semInfo);
+  if (!ranked.length) return { adjusted: [] };
+  // Bias the ranking with any human-promoted lessons for this query shape.
+  // Best-effort: on any failure lessons=[] and applyLessons is inert, so the
+  // ranking is exactly today's. Inert too when no active lesson matches.
+  let lessons = [];
+  try {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 2000);
+    const lr = await fetch(`${API}/mcp/lessons/active`, { headers: CLIENT_HEADERS, signal: ctl.signal });
+    clearTimeout(t);
+    if (lr.ok) lessons = await lr.json();
+  } catch { /* no lessons -> unchanged behavior */ }
+  const adjusted = applyLessons(query, ranked, lessons);
+  return { adjusted };
+}
+
 // ---- mode: MCP server -------------------------------------------------------
 async function runServer() {
   // Append a local-skill gap-targeting line so even no-hook clients are told to
@@ -654,40 +698,11 @@ async function runServer() {
       if (!id) {
         if (!query) return { content: [{ type: 'text', text: 'Provide a `query` (what you need) or an exact `id`. (`context` is also required.)' }] };
         // Widen the candidate pool (specific query + broadest term) so a canonical
-        // skill competes with an obscure match, then rank by query + your context
-        // + the current repo's stack - and surface the runners-up too.
-        const broad = sigTerms(query)[0]; // domain anchor (first significant word, e.g. "mcp"), NOT a generic long token like "server" that floods the pool
-        // Three pools, merged + de-duped: (1) keyword on the full query, (2) keyword
-        // on the domain anchor, (3) SEMANTIC - the catalog's embedding-ranked pool
-        // for the same query. (3) is the recall fix: it surfaces concept matches
-        // the keyword pools never fetch (e.g. a "pub/sub" skill for a "LISTEN/NOTIFY"
-        // query). Degrades safely: if the API has no embeddings, `semantic=` falls
-        // back to a keyword search server-side, so this is at worst another keyword pool.
-        const pools = await Promise.all([
-          smartFetch(query, { type: 'skill', limit: '10' }).then((r) => r.rows).catch(() => []),
-          broad && broad !== query ? fetchListings({ type: 'skill', q: broad, limit: '10' }).catch(() => []) : Promise.resolve([]),
-          fetchListings({ type: 'skill', semantic: query, limit: '10' }).catch(() => []),
-        ]);
-        // The semantic pool comes back nearest-first with a cosine distance per
-        // row; capture rank + distance so rankCandidates can boost concept matches
-        // and the floor can trust only genuinely-close ones.
-        const semInfo = new Map((pools[2] || []).map((r, i) => [r.id, { rank: i, distance: r.semanticDistance }]));
-        const seen = new Set();
-        const cand = pools.flat().filter((r) => r && !seen.has(r.id) && seen.add(r.id));
-        const loadable = cand.filter((r) => isLoadableRepo(r.repo));
-        const ranked = rankCandidates(loadable.length ? loadable : cand, query, context, repoCats, semInfo);
-        if (!ranked.length) return { content: [{ type: 'text', text: `No skill matched "${query}". Try search_skillselion with a shorter query, then load_skill by id.` }] };
-        // Bias the ranking with any human-promoted lessons for this query shape.
-        // Best-effort: on any failure lessons=[] and applyLessons is inert, so the
-        // ranking is exactly today's. Inert too when no active lesson matches.
-        let lessons = [];
-        try {
-          const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 2000);
-          const lr = await fetch(`${API}/mcp/lessons/active`, { headers: CLIENT_HEADERS, signal: ctl.signal });
-          clearTimeout(t);
-          if (lr.ok) lessons = await lr.json();
-        } catch { /* no lessons -> unchanged behavior */ }
-        const adjusted = applyLessons(query, ranked, lessons);
+        // skill competes with an obscure match, rank by query + your context +
+        // the current repo's stack, and bias with any human-promoted lessons -
+        // all inside retrieveRankedSkills, which returns the ranked+adjusted pool.
+        const { adjusted } = await retrieveRankedSkills(query, context, repoCats);
+        if (!adjusted.length) return { content: [{ type: 'text', text: `No skill matched "${query}". Try search_skillselion with a shorter query, then load_skill by id.` }] };
         // Relevance floor: the top pick must share a real topical term with a
         // CURATED field (name/tool/highlights/category) - a hit only in the repo
         // owner slug or free-text prose (e.g. "poem" inside owner "poemswe", or a
