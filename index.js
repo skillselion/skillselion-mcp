@@ -831,7 +831,7 @@ async function runServer() {
         const loaded = (await loadSkillFromCatalog(row.id)) || (repo ? await loadFullSkill(repo, slug) : null);
         if (!loaded) continue;
         if (repoKey) usedRepos.add(repoKey);
-        sources.push({ slug, repo: repo || row.repo || '', tmpDir: loaded.tmpDir });
+        sources.push({ id: row.id, slug, repo: repo || row.repo || '', tmpDir: loaded.tmpDir, loaded });
         for (const r of extractRules(loaded.skillMd, { perSkill: SYNTH_PER_SKILL })) {
           taggedRules.push({ text: r.text, heading: r.heading, slug });
         }
@@ -840,10 +840,10 @@ async function runServer() {
       // Degrade: if only one skill materialized, synthesis of one is a lie - return
       // it via the standard lean load_skill card instead.
       if (sources.length <= 1) {
-        recordDemand({ query, context, matched: sources.length === 1, source: 'synthesize', skillId: sources[0] ? adjusted[0].row.id : undefined });
+        recordDemand({ query, context, matched: sources.length === 1, source: 'synthesize', skillId: sources[0] ? sources[0].id : undefined });
         if (!sources.length) return { content: [{ type: 'text', text: `Could not materialize matching skills for "${query}". Try load_skill for a single skill, or search_skillselion.` }] };
         const only = sources[0];
-        const loaded = (await loadSkillFromCatalog(adjusted[0].row.id)) || await loadFullSkill(only.repo, only.slug);
+        const loaded = only.loaded;
         const card = buildCard({
           slug: only.slug, repo: only.repo, tmpDir: loaded.tmpDir,
           oneLiner: skillOneLiner(loaded.skillMd), fileCount: (loaded.files || []).length,
@@ -853,7 +853,7 @@ async function runServer() {
       }
 
       const merged = dedupeRules(taggedRules);
-      recordDemand({ query, context, matched: true, source: 'synthesize', skillId: adjusted[0].row.id });
+      recordDemand({ query, context, matched: true, source: 'synthesize', skillId: sources[0].id });
       const out = buildSynthesis({ query, sources, rules: merged, budget: SYNTH_BUDGET });
       return { content: [{ type: 'text', text: out }] };
     },
