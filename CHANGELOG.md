@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.3
+
+### Changed
+- **`load_skill` output is now lean by default.** Instead of inlining the full SKILL.md into the tool
+  result, it returns a compact emoji summary (skill, one-liner, dependency flags, file map, runner-up
+  candidates) and leaves the complete SKILL.md plus bundled files materialized on disk for the agent to
+  read and follow. Keeps the human-facing result short and scannable while the agent still gets
+  everything. (The GitHub-fallback path, used when a skill's files can't be materialized, still inlines
+  the SKILL.md text since there is no local copy.)
+
 ## 0.8.2
 
 ### Changed

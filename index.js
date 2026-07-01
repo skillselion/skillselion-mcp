@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.8.2';
+const VERSION = '0.8.3';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -95,10 +95,25 @@ export function buildFilesNote(tmpDir, files) {
   return `## Bundled files (in ${tmpDir})\n${lines}\n\nRead or run these from that folder on demand, exactly as the SKILL.md directs.`;
 }
 
-export function buildCard({ slug, repo, tmpDir, oneLiner }) {
-  return `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${tmpDir}` +
-    (oneLiner ? `\n${oneLiner}` : '') +
-    `\n\nFOLLOW these instructions for the current task, like an installed skill (verify against your project's real constraints):`;
+// Emoji TL;DR headline for a loaded skill. The FIRST line stays the machine-
+// parseable `# Skill loaded: <slug>  (<repo>)` (clients + the eval key off it);
+// the emoji lines under it are the human-scannable summary a person sees in the
+// terminal, while the full SKILL.md + files (for the agent) follow below.
+export function buildCard({ slug, repo, tmpDir, oneLiner, fileCount = 0, depNeeds = '', alts = '' }) {
+  const head = `# Skill loaded: ${slug || repo}  (${repo})`;
+  const tl = ['', `✅ **${slug || repo}**  ·  \`${repo}\``];
+  const ol = oneLiner && oneLiner.length > 130 ? oneLiner.slice(0, 127).replace(/\s+\S*$/, '') + '…' : oneLiner;
+  if (ol) tl.push(`🎯 ${ol}`);
+  if (!tmpDir) tl.push(`📂 SKILL.md shown below (bundled files unavailable this time).`);
+  else tl.push(fileCount > 0
+    ? `📂 SKILL.md + ${fileCount} file(s) saved locally → ${tmpDir}`
+    : `📂 SKILL.md saved locally → ${tmpDir}`);
+  if (depNeeds) tl.push(`⚠️ Needs: ${depNeeds} - check against your project first.`);
+  if (alts) tl.push(`🔀 Or switch to: ${alts}`);
+  tl.push(tmpDir
+    ? `📖 Read ${tmpDir}/SKILL.md and follow it - that is the full skill (its files are in the same folder).`
+    : `📖 Follow the SKILL.md below.`);
+  return head + tl.join('\n');
 }
 
 // Server `instructions` — sent in the MCP initialize handshake, so EVERY client
@@ -637,18 +652,14 @@ async function runServer() {
       // of dead-ending with "Couldn't load".
       if (!picks) picks = [{ id, row: row || null, why: null }];
 
-      const depWarn = (deps) => {
+      // Compact dependency + alternate strings, folded into the emoji TL;DR card.
+      const depNeedsStr = (deps) => {
         if (!deps.tools.length && !deps.needsSecret) return '';
-        const needs = [...deps.tools, deps.needsSecret ? 'an API key/secret' : null].filter(Boolean).join(', ');
-        const conflict = /\bno[ -]?(new )?dep|without installing|don'?t add/i.test(context || '');
-        return `\n\n⚠ Heads-up — this skill appears to require: ${needs}.${conflict ? ' You flagged no new deps, so it may not fit — consider an alternate above.' : ' If your project can’t add those, skip it or pick an alternate above.'}`;
+        return [...deps.tools, deps.needsSecret ? 'an API key/secret' : null].filter(Boolean).join(', ');
       };
-      const otherNote = (usedIdx) => {
-        const others = picks.filter((_, i) => i !== usedIdx).filter((p) => p.why);
-        return others.length
-          ? `\n\n## Other candidates (call load_skill with the id to switch)\n${others.map((p) => `- \`${p.id}\` — ${p.why}`).join('\n')}`
-          : '';
-      };
+      const altsStr = (usedIdx) => picks
+        .filter((_, i) => i !== usedIdx).filter((p) => p.why)
+        .map((p) => `\`${p.id}\``).join(' · ');
 
       recordDemand({ query: query || picks[0].id, context, matched: true, skillId: picks[0].id, topScore, semanticDistance: picks[0].semanticDistance ?? undefined });
       let lastRepo = '', lastSlug = '';
@@ -662,14 +673,18 @@ async function runServer() {
         // then fall back to fetching from GitHub by guessing conventional paths.
         const loaded = (await loadSkillFromCatalog(cid)) || (repo ? await loadFullSkill(repo, slug) : null);
         if (loaded) {
-          const clip = clipSkillMd(loaded.skillMd, INLINE_BUDGET);
-          const body = clip.clipped
-            ? clip.text + `\n\n…(${clip.remaining} more section(s) - read ${loaded.tmpDir}/SKILL.md for the full procedure)`
-            : clip.text;
-          const card = buildCard({ slug, repo, tmpDir: loaded.tmpDir, oneLiner: skillOneLiner(loaded.skillMd) });
+          // Lean by default: return the emoji TL;DR + the file map only. The full
+          // SKILL.md is materialized to disk (not dumped into the visible output);
+          // the agent reads it from ${tmpDir}/SKILL.md to follow the skill. Keeps
+          // the human-facing tool result short while the agent still gets everything.
+          const card = buildCard({
+            slug, repo, tmpDir: loaded.tmpDir, oneLiner: skillOneLiner(loaded.skillMd),
+            fileCount: (loaded.files || []).length,
+            depNeeds: depNeedsStr(detectDeps(loaded.skillMd)),
+            alts: altsStr(k),
+          });
           const filesNote = buildFilesNote(loaded.tmpDir, loaded.files || []);
-          return { content: [{ type: 'text', text:
-            `${card}\n\n## SKILL.md\n${body}\n\n${filesNote}${depWarn(detectDeps(loaded.skillMd))}${otherNote(k)}` }] };
+          return { content: [{ type: 'text', text: `${card}\n\n${filesNote}` }] };
         }
         // fallback: just the SKILL.md text (e.g. GitHub tree API rate-limited)
         const got = await fetchSkillContent(repo, slug);
@@ -678,7 +693,11 @@ async function runServer() {
           const body = clip.clipped
             ? clip.text + `\n\n…(${clip.remaining} more section(s) - see ${got.url})`
             : clip.text;
-          return { content: [{ type: 'text', text: `# Skill loaded: ${slug || repo}  (${repo})\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}${depWarn(detectDeps(got.content))}${otherNote(k)}` }] };
+          const card = buildCard({
+            slug, repo, tmpDir: '', oneLiner: skillOneLiner(got.content),
+            fileCount: 0, depNeeds: depNeedsStr(detectDeps(got.content)), alts: altsStr(k),
+          });
+          return { content: [{ type: 'text', text: `${card}\n\nSource: ${got.url}\n\n## SKILL.md\n${body}` }] };
         }
         // else: this candidate couldn't be materialized - try the next one
       }
