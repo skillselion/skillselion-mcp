@@ -308,6 +308,7 @@ const SEM_WEIGHT = numEnv('SK_SEM_WEIGHT', 9);
 const QSTRONG_WEIGHT = numEnv('SK_QSTRONG_WEIGHT', 3);
 const SEM_FLOOR_RANK = numEnv('SK_SEM_FLOOR_RANK', 5);
 const FLOOR_MIN_QSTRONG = numEnv('SK_FLOOR_MIN_QSTRONG', 2);
+const INLINE_BUDGET = numEnv('SK_INLINE_BUDGET', 6000);
 function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
   const qTerms = sigTerms(query);
   const cTerms = sigTerms(context).slice(0, 16);
@@ -452,6 +453,7 @@ async function loadFullSkill(repo, slug) {
     mkdirSync(tmpDir, { recursive: true });
     let skillMd = '';
     const manifest = [];
+    const filesMeta = [];
     for (const f of files) {
       const rel = skillDir ? f.path.slice(prefix.length) : f.path;
       try {
@@ -464,10 +466,13 @@ async function loadFullSkill(repo, slug) {
         mkdirSync(dirname(dest), { recursive: true });
         writeFileSync(dest, buf);
         if (rel.toLowerCase() === 'skill.md') skillMd = buf.toString('utf8');
-        else manifest.push(rel);
+        else {
+          manifest.push(rel);
+          filesMeta.push({ rel, purpose: /\.md$/i.test(rel) ? filePurpose(rel, buf.toString('utf8')) : '' });
+        }
       } catch { /* skip this file */ }
     }
-    if (skillMd) return { skillMd, tmpDir, manifest, skillDir, repo, slug };
+    if (skillMd) return { skillMd, tmpDir, manifest, files: filesMeta, skillDir, repo, slug };
   }
   return null;
 }
@@ -505,6 +510,7 @@ async function loadSkillFromCatalog(id) {
     mkdirSync(tmpDir, { recursive: true });
     let skillMd = '';
     const manifest = [];
+    const filesMeta = [];
     for (const f of files.slice(0, 100)) {
       const rel = skillDir && f.path.startsWith(prefix) ? f.path.slice(prefix.length) : f.path;
       try {
@@ -512,10 +518,13 @@ async function loadSkillFromCatalog(id) {
         mkdirSync(dirname(dest), { recursive: true });
         writeFileSync(dest, f.contents);
         if (rel.toLowerCase() === 'skill.md') skillMd = f.contents;
-        else manifest.push(rel);
+        else {
+          manifest.push(rel);
+          filesMeta.push({ rel, purpose: /\.md$/i.test(rel) ? filePurpose(rel, f.contents) : '' });
+        }
       } catch { /* skip this file */ }
     }
-    if (skillMd) return { skillMd, tmpDir, manifest, skillDir, source: data.source };
+    if (skillMd) return { skillMd, tmpDir, manifest, files: filesMeta, skillDir, source: data.source };
   } catch { /* fall through to GitHub */ }
   return null;
 }
@@ -653,18 +662,23 @@ async function runServer() {
         // then fall back to fetching from GitHub by guessing conventional paths.
         const loaded = (await loadSkillFromCatalog(cid)) || (repo ? await loadFullSkill(repo, slug) : null);
         if (loaded) {
-          const filesNote = loaded.manifest.length
-            ? `## Bundled files (materialized to ${loaded.tmpDir})\n${loaded.manifest.map((f) => '- ' + f).join('\n')}\n\nRead or run these from that folder exactly as the SKILL.md directs (e.g. \`python ${loaded.tmpDir}/scripts/<name>.py\`, or read \`${loaded.tmpDir}/references/<name>.md\`).`
-            : '## Bundled files: none - this skill is just its SKILL.md.';
-          const body = loaded.skillMd.length > 14000 ? loaded.skillMd.slice(0, 14000) + `\n\n…(truncated - full file at ${loaded.tmpDir}/SKILL.md)` : loaded.skillMd;
+          const clip = clipSkillMd(loaded.skillMd, INLINE_BUDGET);
+          const body = clip.clipped
+            ? clip.text + `\n\n…(${clip.remaining} more section(s) - read ${loaded.tmpDir}/SKILL.md for the full procedure)`
+            : clip.text;
+          const card = buildCard({ slug, repo, tmpDir: loaded.tmpDir, oneLiner: skillOneLiner(loaded.skillMd) });
+          const filesNote = buildFilesNote(loaded.tmpDir, loaded.files || []);
           return { content: [{ type: 'text', text:
-            `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${loaded.tmpDir}\n\nFOLLOW these instructions for the current task, like an installed skill (verify against your project's real constraints):\n\n## SKILL.md\n${body}\n\n${filesNote}${depWarn(detectDeps(loaded.skillMd))}${otherNote(k)}` }] };
+            `${card}\n\n## SKILL.md\n${body}\n\n${filesNote}${depWarn(detectDeps(loaded.skillMd))}${otherNote(k)}` }] };
         }
         // fallback: just the SKILL.md text (e.g. GitHub tree API rate-limited)
         const got = await fetchSkillContent(repo, slug);
         if (got) {
-          const body = got.content.length > 12000 ? got.content.slice(0, 12000) + '\n\n…(truncated - see ' + got.url + ')' : got.content;
-          return { content: [{ type: 'text', text: `# Skill: ${slug || repo}\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}${depWarn(detectDeps(got.content))}${otherNote(k)}` }] };
+          const clip = clipSkillMd(got.content, INLINE_BUDGET);
+          const body = clip.clipped
+            ? clip.text + `\n\n…(${clip.remaining} more section(s) - see ${got.url})`
+            : clip.text;
+          return { content: [{ type: 'text', text: `# Skill loaded: ${slug || repo}  (${repo})\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}${depWarn(detectDeps(got.content))}${otherNote(k)}` }] };
         }
         // else: this candidate couldn't be materialized - try the next one
       }
