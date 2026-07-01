@@ -32,9 +32,17 @@ assert.ok(note.includes('- references/a.md - Retry policy'));
 assert.ok(note.includes('- scripts/x.sh'));
 assert.ok(buildFilesNote('/tmp/skill', []).toLowerCase().includes('just its skill.md'));
 
-// buildCard: first line format preserved, path + oneLiner present
-const card = buildCard({slug:'foo', repo:'owner/repo', tmpDir:'/tmp/skill', oneLiner:'Does X'});
-assert.ok(card.startsWith('# Skill loaded: foo  (owner/repo)'), 'first line format');
-assert.ok(card.includes('Local copy: /tmp/skill'));
-assert.ok(card.includes('Does X'));
+// buildCard: machine first line preserved + emoji TL;DR with path, one-liner, files, deps, alts
+const card = buildCard({slug:'foo', repo:'owner/repo', tmpDir:'/tmp/skill', oneLiner:'Does X', fileCount:3, depNeeds:'playwright', alts:'`skill:a/b#c`'});
+assert.ok(card.startsWith('# Skill loaded: foo  (owner/repo)'), 'first line format (machine-parseable)');
+assert.ok(card.includes('✅'), 'emoji tldr present');
+assert.ok(card.includes('🎯 Does X'), 'one-liner in tldr');
+assert.ok(card.includes('/tmp/skill'), 'temp path in tldr');
+assert.ok(card.includes('3 file'), 'file count in tldr');
+assert.ok(card.includes('playwright'), 'dep needs in tldr');
+assert.ok(card.includes('skill:a/b#c'), 'alternate in tldr');
+// no deps / no alts / no files -> those lines omitted, still valid
+const bare = buildCard({slug:'x', repo:'o/r', tmpDir:'/t', oneLiner:''});
+assert.ok(bare.startsWith('# Skill loaded: x  (o/r)'));
+assert.ok(!bare.includes('⚠️') && !bare.includes('🔀'), 'no dep/alt lines when absent');
 console.log('response-format ok');
