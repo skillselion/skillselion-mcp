@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0
+
+### Added
+- **New `synthesize_skills` tool.** Alongside `load_skill` (still the everyday default), it retrieves the top matching skills (default 5, `SK_SYNTH_N`, clamp 2-8), deduped by repo, and returns a compact, provenance-tagged digest of their key rules merged and deduped across sources - a cross-source playbook no single skill or the model's memory has. Each source skill is still materialized to disk for full detail. Rule extraction is a cheap client-side heuristic (no server LLM); output is budget-capped (`SK_SYNTH_BUDGET`, default 4000 chars) and per-skill capped (`SK_SYNTH_PER_SKILL`, default 12). Degrades to a single `load_skill` card when only one skill matches. `load_skill` behavior is unchanged.
+
 ## 0.8.3
 
 ### Changed

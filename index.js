@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.8.3';
+const VERSION = '0.9.0';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -691,7 +691,7 @@ async function runServer() {
 
   server.tool(
     'load_skill',
-    'Load a community-vetted skill into your context on demand - like installing it mid-task. Reach for this when a task is in a domain a skill likely covers (tests, frontend/UI, an API/DB, infra, a named framework) and a proven recipe would beat improvising - most valuable in territory you are less sure of, or fast-moving stacks where your memory may be stale. You MUST pass `context` (your task + stack + constraints): it ranks candidates, fits them to your current repo, flags dependency mismatches, and keeps the load deliberate. Returns the best match (real SKILL.md + bundled scripts/refs materialized to a temp folder, used like an installed skill) PLUS the next-best candidates so you can switch. Always verify the loaded skill against your project before trusting it.',
+    'Load a community-vetted skill into your context on demand - like installing it mid-task. Reach for this when a task is in a domain a skill likely covers (tests, frontend/UI, an API/DB, infra, a named framework) and a proven recipe would beat improvising - most valuable in territory you are less sure of, or fast-moving stacks where your memory may be stale. You MUST pass `context` (your task + stack + constraints): it ranks candidates, fits them to your current repo, flags dependency mismatches, and keeps the load deliberate. Returns the best match (real SKILL.md + bundled scripts/refs materialized to a temp folder, used like an installed skill) PLUS the next-best candidates so you can switch. Always verify the loaded skill against your project before trusting it. For broad "current best practices across the field" tasks that span several skills, use synthesize_skills instead.',
     {
       query: z.string().optional().describe('What you need - task/skill keywords (e.g. "playwright e2e tests"). Required unless you pass an exact id.'),
       context: z.string().describe('REQUIRED. What you are actually doing + your stack + constraints/anti-patterns (e.g. "Next.js marketing page, no new deps, role-based locators"). Ranks candidates, fits them to your repo, and flags dependency mismatches. Be specific - this also keeps the load deliberate, not reflexive.'),

@@ -46,9 +46,27 @@ Skillselion indexes **thousands of** Claude Code skills, MCP servers and plugin 
 |------|--------------|
 | 🔍 **`search_skillselion`** | Search by keyword or task (`postgres`, `code review`, `playwright`); optional `type` filter (`skill` / `mcp` / `marketplace`). Returns name, type, installs, stars, repo, an install command, and the listing URL. |
 | 📥 **`load_skill`** | **The dynamic load.** Pulls a skill's real **`SKILL.md`** into context **and materializes its whole directory** (scripts, references, templates) into a **temp folder**, so the agent uses it like an *installed* skill — read/run the bundled files included. Pass an `id` from search, or a `query`. |
+| 🧬 **`synthesize_skills`** | **The cross-source playbook.** Merges the key rules from the top matching skills into one deduped, provenance-tagged digest - the field's combined guidance rather than a single skill's. Each source skill is still materialized to disk in full. Pass a `query` + `context`. |
 | 🏆 **`top_skillselion`** | The leaderboard — "what are the best Claude Code skills / MCP servers right now." Skills rank by installs; MCP servers & marketplaces by GitHub stars. |
 
 **What `load_skill` returns** is progressive, to keep your context lean: a compact card (name, one-liner, dependency flags, local path, runner-up candidates) + the `SKILL.md` body (inlined in full when small; for very large skills clipped at a section boundary with a pointer to the complete file on local disk) + the bundled scripts/references listed with a one-line purpose each rather than inlined, so you `Read` them on demand. The whole skill is always materialized to disk in full, so nothing is lost - only the in-context portion is bounded. Tune that bound with the `SK_INLINE_BUDGET` env var (default 6000 chars).
+
+### 🧬 `synthesize_skills` - one playbook across skills
+
+`load_skill` gives you **one** skill (its real `SKILL.md` plus every bundled script and reference). `synthesize_skills` goes wider: it retrieves the top matching skills, dedupes them by repo, extracts their key rules with a cheap client-side heuristic (no server LLM), and merges them into a single **deduped, provenance-tagged digest** - a cross-source playbook that no single skill or the model's own memory holds. Every source skill is still materialized to disk in full, so you can drop into any one of them for the complete detail. When only one skill matches, it degrades gracefully to the standard `load_skill` card.
+
+**When to use which:**
+
+- **`load_skill`** - you want a *specific* skill and its bundled files (e.g. "load the Playwright e2e testing skill"). The everyday default.
+- **`synthesize_skills`** - you want the field's *combined* guidance for a broad question that spans several skills (e.g. "current best practices for hardening a Postgres schema"), not one skill's take.
+
+**Env vars:**
+
+| Var | Default | What it controls |
+|-----|---------|------------------|
+| `SK_SYNTH_N` | `5` | How many top matching skills to merge (clamped to 2-8). |
+| `SK_SYNTH_PER_SKILL` | `12` | Max rules kept per source skill before merging. |
+| `SK_SYNTH_BUDGET` | `4000` | Character cap on the merged digest, so the result stays lean. |
 
 > **Private by default.** To rank skills to your stack, it reads your installed-skill names and your project's `package.json` locally, and transmits none of that. The only data it sends is your **search query** (scrubbed of emails, tokens/keys and file paths, and capped at 200 chars), whether it matched, and the id of the skill it loaded, so the catalog learns which skills to add next. The signal carries no identity, IP, or client fingerprint. It never sends your code, your files, or the `context` you pass. Set `DO_NOT_TRACK=1` (or `SK_NO_DEMAND=1`) to disable that too. No auth, no secrets. Ranking can also be nudged by human-approved catalog "lessons" (fetched read-only) - never by your data.
 
