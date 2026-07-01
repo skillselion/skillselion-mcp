@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "start": "node index.js",
-    "test": "node test/smoke.mjs",
+    "test": "node test/smoke.mjs && node test/response-format.mjs",
     "test:live": "node test/verbose.mjs && node test/relevance.mjs && node test/live.mjs"
   },
   "keywords": [
