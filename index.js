@@ -25,7 +25,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -50,6 +50,55 @@ export function scrubQuery(raw) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 200);
+}
+
+// --- load_skill response builders (progressive disclosure) ---
+export function skillOneLiner(skillMd) {
+  const s = String(skillMd || '');
+  const fm = s.match(/^---\n([\s\S]*?)\n---/);
+  if (fm) {
+    const d = fm[1].match(/^description:\s*(.+)$/m);
+    if (d) return d[1].replace(/^["'>|]+|["']+$/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  }
+  const body = fm ? s.slice(fm[0].length) : s;
+  for (const line of body.split('\n')) {
+    const t = line.trim();
+    if (t && !t.startsWith('#') && !t.startsWith('---')) return t.replace(/\s+/g, ' ').slice(0, 200);
+  }
+  return '';
+}
+
+export function clipSkillMd(skillMd, budget) {
+  const s = String(skillMd || '');
+  if (s.length <= budget) return { text: s, clipped: false, remaining: 0 };
+  const head = s.slice(0, budget);
+  const lastSec = Math.max(head.lastIndexOf('\n## '), head.lastIndexOf('\n### '));
+  const cut = lastSec > budget * 0.4 ? lastSec : (head.lastIndexOf('\n') > 0 ? head.lastIndexOf('\n') : budget);
+  const kept = s.slice(0, cut);
+  const remaining = (s.slice(cut).match(/\n#{2,3} /g) || []).length;
+  return { text: kept, clipped: true, remaining };
+}
+
+export function filePurpose(relPath, content) {
+  if (!/\.md$/i.test(String(relPath)) || !content) return '';
+  for (const line of String(content).split('\n')) {
+    const t = line.trim();
+    if (t.startsWith('# ')) return t.replace(/^#+\s*/, '').slice(0, 80);
+    if (t && !t.startsWith('---') && !t.startsWith('#')) return t.slice(0, 80);
+  }
+  return '';
+}
+
+export function buildFilesNote(tmpDir, files) {
+  if (!files || !files.length) return '## Bundled files: none - this skill is just its SKILL.md.';
+  const lines = files.map((f) => `- ${f.rel}${f.purpose ? ' - ' + f.purpose : ''}`).join('\n');
+  return `## Bundled files (in ${tmpDir})\n${lines}\n\nRead or run these from that folder on demand, exactly as the SKILL.md directs.`;
+}
+
+export function buildCard({ slug, repo, tmpDir, oneLiner }) {
+  return `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${tmpDir}` +
+    (oneLiner ? `\n${oneLiner}` : '') +
+    `\n\nFOLLOW these instructions for the current task, like an installed skill (verify against your project's real constraints):`;
 }
 
 // Server `instructions` — sent in the MCP initialize handshake, so EVERY client
@@ -259,6 +308,7 @@ const SEM_WEIGHT = numEnv('SK_SEM_WEIGHT', 9);
 const QSTRONG_WEIGHT = numEnv('SK_QSTRONG_WEIGHT', 3);
 const SEM_FLOOR_RANK = numEnv('SK_SEM_FLOOR_RANK', 5);
 const FLOOR_MIN_QSTRONG = numEnv('SK_FLOOR_MIN_QSTRONG', 2);
+const INLINE_BUDGET = Math.max(500, numEnv('SK_INLINE_BUDGET', 6000));
 function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
   const qTerms = sigTerms(query);
   const cTerms = sigTerms(context).slice(0, 16);
@@ -403,6 +453,7 @@ async function loadFullSkill(repo, slug) {
     mkdirSync(tmpDir, { recursive: true });
     let skillMd = '';
     const manifest = [];
+    const filesMeta = [];
     for (const f of files) {
       const rel = skillDir ? f.path.slice(prefix.length) : f.path;
       try {
@@ -415,10 +466,13 @@ async function loadFullSkill(repo, slug) {
         mkdirSync(dirname(dest), { recursive: true });
         writeFileSync(dest, buf);
         if (rel.toLowerCase() === 'skill.md') skillMd = buf.toString('utf8');
-        else manifest.push(rel);
+        else {
+          manifest.push(rel);
+          filesMeta.push({ rel, purpose: /\.md$/i.test(rel) ? filePurpose(rel, buf.toString('utf8')) : '' });
+        }
       } catch { /* skip this file */ }
     }
-    if (skillMd) return { skillMd, tmpDir, manifest, skillDir, repo, slug };
+    if (skillMd) return { skillMd, tmpDir, manifest, files: filesMeta, skillDir, repo, slug };
   }
   return null;
 }
@@ -456,6 +510,7 @@ async function loadSkillFromCatalog(id) {
     mkdirSync(tmpDir, { recursive: true });
     let skillMd = '';
     const manifest = [];
+    const filesMeta = [];
     for (const f of files.slice(0, 100)) {
       const rel = skillDir && f.path.startsWith(prefix) ? f.path.slice(prefix.length) : f.path;
       try {
@@ -463,10 +518,13 @@ async function loadSkillFromCatalog(id) {
         mkdirSync(dirname(dest), { recursive: true });
         writeFileSync(dest, f.contents);
         if (rel.toLowerCase() === 'skill.md') skillMd = f.contents;
-        else manifest.push(rel);
+        else {
+          manifest.push(rel);
+          filesMeta.push({ rel, purpose: /\.md$/i.test(rel) ? filePurpose(rel, f.contents) : '' });
+        }
       } catch { /* skip this file */ }
     }
-    if (skillMd) return { skillMd, tmpDir, manifest, skillDir, source: data.source };
+    if (skillMd) return { skillMd, tmpDir, manifest, files: filesMeta, skillDir, source: data.source };
   } catch { /* fall through to GitHub */ }
   return null;
 }
@@ -604,18 +662,23 @@ async function runServer() {
         // then fall back to fetching from GitHub by guessing conventional paths.
         const loaded = (await loadSkillFromCatalog(cid)) || (repo ? await loadFullSkill(repo, slug) : null);
         if (loaded) {
-          const filesNote = loaded.manifest.length
-            ? `## Bundled files (materialized to ${loaded.tmpDir})\n${loaded.manifest.map((f) => '- ' + f).join('\n')}\n\nRead or run these from that folder exactly as the SKILL.md directs (e.g. \`python ${loaded.tmpDir}/scripts/<name>.py\`, or read \`${loaded.tmpDir}/references/<name>.md\`).`
-            : '## Bundled files: none - this skill is just its SKILL.md.';
-          const body = loaded.skillMd.length > 14000 ? loaded.skillMd.slice(0, 14000) + `\n\n…(truncated - full file at ${loaded.tmpDir}/SKILL.md)` : loaded.skillMd;
+          const clip = clipSkillMd(loaded.skillMd, INLINE_BUDGET);
+          const body = clip.clipped
+            ? clip.text + `\n\n…(${clip.remaining} more section(s) - read ${loaded.tmpDir}/SKILL.md for the full procedure)`
+            : clip.text;
+          const card = buildCard({ slug, repo, tmpDir: loaded.tmpDir, oneLiner: skillOneLiner(loaded.skillMd) });
+          const filesNote = buildFilesNote(loaded.tmpDir, loaded.files || []);
           return { content: [{ type: 'text', text:
-            `# Skill loaded: ${slug || repo}  (${repo})\nLocal copy: ${loaded.tmpDir}\n\nFOLLOW these instructions for the current task, like an installed skill (verify against your project's real constraints):\n\n## SKILL.md\n${body}\n\n${filesNote}${depWarn(detectDeps(loaded.skillMd))}${otherNote(k)}` }] };
+            `${card}\n\n## SKILL.md\n${body}\n\n${filesNote}${depWarn(detectDeps(loaded.skillMd))}${otherNote(k)}` }] };
         }
         // fallback: just the SKILL.md text (e.g. GitHub tree API rate-limited)
         const got = await fetchSkillContent(repo, slug);
         if (got) {
-          const body = got.content.length > 12000 ? got.content.slice(0, 12000) + '\n\n…(truncated - see ' + got.url + ')' : got.content;
-          return { content: [{ type: 'text', text: `# Skill: ${slug || repo}\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}${depWarn(detectDeps(got.content))}${otherNote(k)}` }] };
+          const clip = clipSkillMd(got.content, INLINE_BUDGET);
+          const body = clip.clipped
+            ? clip.text + `\n\n…(${clip.remaining} more section(s) - see ${got.url})`
+            : clip.text;
+          return { content: [{ type: 'text', text: `# Skill loaded: ${slug || repo}  (${repo})\nSource: ${got.url}\n\nFOLLOW these instructions for the current task:\n\n${body}${depWarn(detectDeps(got.content))}${otherNote(k)}` }] };
         }
         // else: this candidate couldn't be materialized - try the next one
       }

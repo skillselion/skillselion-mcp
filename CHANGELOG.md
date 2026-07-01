@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.1
+
+### Changed
+- **`load_skill` responses now use 3-tier progressive disclosure** to cut the tokens injected into the
+  caller's context. A compact card (name, one-liner, dependency flags, local path, runner-ups) is
+  always returned; the SKILL.md body is inlined in full when small and, when large, clipped at a
+  section boundary with a pointer to the full file on local disk; bundled reference/script files are
+  listed with a one-line purpose each and read on demand rather than inlined. The complete skill is
+  always materialized to disk (unchanged) - only what is placed in-context is bounded, so there is no
+  added latency. The inline budget is env-overridable via `SK_INLINE_BUDGET` (default 6000 chars).
+
 ## 0.8.0
 
 ### Added
