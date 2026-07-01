@@ -394,6 +394,12 @@ const QSTRONG_WEIGHT = numEnv('SK_QSTRONG_WEIGHT', 3);
 const SEM_FLOOR_RANK = numEnv('SK_SEM_FLOOR_RANK', 5);
 const FLOOR_MIN_QSTRONG = numEnv('SK_FLOOR_MIN_QSTRONG', 2);
 const INLINE_BUDGET = Math.max(500, numEnv('SK_INLINE_BUDGET', 6000));
+// synthesize_skills knobs. SYNTH_N = how many top skills to merge (clamped 2-8);
+// SYNTH_PER_SKILL = max rule lines pulled per skill; SYNTH_BUDGET = char cap on
+// the merged digest so the tool result stays lean.
+const SYNTH_N = Math.max(2, Math.min(8, numEnv('SK_SYNTH_N', 5)));
+const SYNTH_PER_SKILL = Math.max(1, numEnv('SK_SYNTH_PER_SKILL', 12));
+const SYNTH_BUDGET = Math.max(800, numEnv('SK_SYNTH_BUDGET', 4000));
 function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
   const qTerms = sigTerms(query);
   const cTerms = sigTerms(context).slice(0, 16);
@@ -788,6 +794,68 @@ async function runServer() {
       }
       if (!lastRepo) return { content: [{ type: 'text', text: `Could not resolve a GitHub repo for "${id}".` }] };
       return { content: [{ type: 'text', text: `Couldn't load "${id}". Install it instead: npx skills add https://github.com/${lastRepo}${lastSlug ? ` --skill ${lastSlug}` : ''}` }] };
+    },
+  );
+
+  server.tool(
+    'synthesize_skills',
+    'Pull the BEST rules across the top matching community skills and merge them into one cross-source playbook - use for broad "how should I approach X / current best practices" tasks that span multiple skills, or when you want the field\'s combined guidance rather than one skill\'s. For a single specific skill (and its bundled scripts/files), use load_skill instead. Pass your task as `query` and your stack + constraints as `context` (required). Returns a deduped, provenance-tagged rule digest plus each source skill materialized on disk.',
+    {
+      query: z.string().describe('The topic/task to synthesize across skills (e.g. "playwright e2e testing best practices").'),
+      context: z.string().describe('REQUIRED. What you are actually doing + your stack + constraints. Ranks candidates and fits them to your repo.'),
+    },
+    async ({ query, context }) => {
+      if (!context || !String(context).trim()) return { content: [{ type: 'text', text: 'synthesize_skills needs `context` - tell me what you are doing + your stack + constraints.' }] };
+      if (!query || !String(query).trim()) return { content: [{ type: 'text', text: 'synthesize_skills needs a `query` - the topic/task to synthesize across skills.' }] };
+      const repoCats = (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
+      const { adjusted } = await retrieveRankedSkills(query, context, repoCats);
+      if (!adjusted.length) {
+        recordDemand({ query, context, matched: false, source: 'synthesize' });
+        return { content: [{ type: 'text', text: `No skill on Skillselion clearly matches "${query}". Proceed with your own approach, or try a more specific query / search_skillselion.` }] };
+      }
+
+      // Take the top-N ranked, DEDUPED BY REPO (never two entries from one repo),
+      // and materialize each. Skip any that fail to materialize, continuing down
+      // the ranked list so we keep N real skills where possible.
+      const usedRepos = new Set();
+      const sources = [];
+      const taggedRules = [];
+      for (const cand of adjusted) {
+        if (sources.length >= SYNTH_N) break;
+        const row = cand.row;
+        const repoKey = String(row.repo || '').toLowerCase();
+        if (repoKey && usedRepos.has(repoKey)) continue;
+        const mm = String(row.id).match(/^skill:([^#]+)#(.+)$/);
+        const repo = mm ? mm[1] : row.repo;
+        const slug = mm ? mm[2] : (row.name || row.id);
+        const loaded = (await loadSkillFromCatalog(row.id)) || (repo ? await loadFullSkill(repo, slug) : null);
+        if (!loaded) continue;
+        if (repoKey) usedRepos.add(repoKey);
+        sources.push({ slug, repo: repo || row.repo || '', tmpDir: loaded.tmpDir });
+        for (const r of extractRules(loaded.skillMd, { perSkill: SYNTH_PER_SKILL })) {
+          taggedRules.push({ text: r.text, heading: r.heading, slug });
+        }
+      }
+
+      // Degrade: if only one skill materialized, synthesis of one is a lie - return
+      // it via the standard lean load_skill card instead.
+      if (sources.length <= 1) {
+        recordDemand({ query, context, matched: sources.length === 1, source: 'synthesize', skillId: sources[0] ? adjusted[0].row.id : undefined });
+        if (!sources.length) return { content: [{ type: 'text', text: `Could not materialize matching skills for "${query}". Try load_skill for a single skill, or search_skillselion.` }] };
+        const only = sources[0];
+        const loaded = (await loadSkillFromCatalog(adjusted[0].row.id)) || await loadFullSkill(only.repo, only.slug);
+        const card = buildCard({
+          slug: only.slug, repo: only.repo, tmpDir: loaded.tmpDir,
+          oneLiner: skillOneLiner(loaded.skillMd), fileCount: (loaded.files || []).length,
+          depNeeds: '', alts: '',
+        });
+        return { content: [{ type: 'text', text: `${card}\n\n${buildFilesNote(loaded.tmpDir, loaded.files || [])}\n\n(Only one skill matched - loaded it directly instead of synthesizing.)` }] };
+      }
+
+      const merged = dedupeRules(taggedRules);
+      recordDemand({ query, context, matched: true, source: 'synthesize', skillId: adjusted[0].row.id });
+      const out = buildSynthesis({ query, sources, rules: merged, budget: SYNTH_BUDGET });
+      return { content: [{ type: 'text', text: out }] };
     },
   );
 

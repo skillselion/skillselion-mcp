@@ -92,3 +92,26 @@ t('buildSynthesis respects the budget cap', () => {
 });
 
 console.log(`\nsynthesis offline: ${pass} passed`);
+
+if (process.argv.includes('--live')) {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+  const transport = new StdioClientTransport({ command: 'node', args: ['index.js'], env: { ...process.env } });
+  const client = new Client({ name: 'synth-smoke', version: '0' });
+  await client.connect(transport);
+  const res = await client.callTool({ name: 'synthesize_skills', arguments: {
+    query: 'playwright end-to-end testing best practices',
+    context: 'Next.js + TypeScript app, want combined guidance across skills',
+  } });
+  const text = (res.content || []).map((c) => c.text || '').join('\n');
+  assert.ok(/^🧬 Synthesized from \d+ skills/.test(text) || /^# Skill loaded:/.test(text),
+    'synthesize returns a digest (or degrades to a single load_skill card)');
+  if (/^🧬/.test(text)) {
+    assert.ok(/## Merged rules/.test(text), 'has merged rules block');
+    assert.ok(text.length <= 8000, 'stays lean');
+  }
+  await client.close();
+  console.log('  ok - synthesize_skills live smoke');
+  pass++;
+}
+console.log(`\nsynthesis total: ${pass} passed`);
