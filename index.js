@@ -311,7 +311,7 @@ function rankCandidates(rows, query, context, repoCats, semInfo = new Map()) {
 // shape must be present in the query, so a lesson only fires for the queries it
 // was written for. INERT when no lesson is active/matches (returns `ranked`
 // untouched) - prod ranking cannot drift until a human promotes a lesson.
-function _shapeMatches(query, shape) {
+export function _shapeMatches(query, shape) {
   const q = ` ${String(query).toLowerCase()} `;
   return String(shape).toLowerCase().split(/\s+/).filter((t) => t.length > 2).every((t) => q.includes(t));
 }
@@ -323,11 +323,12 @@ export function applyLessons(query, ranked, lessons) {
   const block = new Set(active.map((l) => l.blockListingId).filter(Boolean));
   const idOf = (r) => (r && r.id != null ? r.id : (r && r.row ? r.row.id : undefined));
   const adj = ranked.map((r) => {
-    let score = r.score;
     const rid = idOf(r);
-    if (block.has(rid)) score -= 1000;
-    if (prefer.has(rid)) score += 1000;
-    return { ...r, score };
+    if (block.has(rid)) return { ...r, score: r.score - 1000 };
+    // A prefer lesson must clear the relevance floor, not just reorder: semStrong
+    // is exactly what the downstream floor check treats as floor-clearing.
+    if (prefer.has(rid)) return { ...r, score: r.score + 1000, semStrong: true };
+    return r;
   });
   return adj.sort((x, y) => y.score - x.score);
 }
