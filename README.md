@@ -1,6 +1,4 @@
-<p align="center">
-  <a href="https://skillselion.com"><img src="https://raw.githubusercontent.com/skillselion/skillselion-mcp/master/assets/banner-v2.svg" alt="Skillselion MCP" width="100%"></a>
-</p>
+<h1 align="center">Skillselion MCP</h1>
 
 <p align="center">
   <a href="https://skillselion.com"><img src="https://raw.githubusercontent.com/skillselion/skillselion-mcp/master/assets/skillselion-site.png" alt="skillselion.com - the #1 directory of Claude Code, Codex & Cursor skills, marketplaces & MCP servers: 86,207 tools total" width="92%"></a>
