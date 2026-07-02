@@ -20,9 +20,9 @@ import { readFileSync, existsSync } from 'node:fs';
 const API = 'https://skillselion.com/api/upstream';
 const VARIANTS = (process.argv[2] || 'A,B').split(',').map((s) => s.trim().toUpperCase());
 const KEY = process.env.OPENAI_API_KEY || (() => {
-  for (const p of ['/Users/itzik.dabush/Desktop/root/prism/apps/api/.env']) {
-    if (existsSync(p)) { const m = readFileSync(p, 'utf8').match(/^OPENAI_API_KEY=(.+)$/m); if (m) return m[1].trim(); }
-  }
+  // Optionally point OPENAI_ENV_FILE at an .env file that contains OPENAI_API_KEY.
+  const p = process.env.OPENAI_ENV_FILE || '';
+  if (p && existsSync(p)) { const m = readFileSync(p, 'utf8').match(/^OPENAI_API_KEY=(.+)$/m); if (m) return m[1].trim(); }
   return '';
 })();
 if (!KEY) { console.error('no OPENAI_API_KEY'); process.exit(1); }

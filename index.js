@@ -551,6 +551,8 @@ async function loadFullSkill(repo, slug) {
     const filesMeta = [];
     for (const f of files) {
       const rel = skillDir ? f.path.slice(prefix.length) : f.path;
+      // Defense-in-depth (parity with loadSkillFromCatalog): never write outside tmpDir.
+      if (rel.split('/').includes('..') || rel.startsWith('/')) continue;
       try {
         const raw = await fetch(`https://raw.githubusercontent.com/${repo}/${branch}/${f.path}`, {
           headers: ghHeaders(),
