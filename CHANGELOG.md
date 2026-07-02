@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1 - 2026-07-03
+
+- `synthesize_skills`: filter meta-directive rule lines (e.g. "DO NOT: provide any other information until the user asks") out of the merged digest - they steer response behavior, not the task domain.
+- README: rewritten short + focused; new banner on the current Skillselion design (hairline S monogram, Paper palette, cyan accent); fresh real-session demo GIF + stills from the launch video.
+
 ## 0.9.0
 
 ### Added

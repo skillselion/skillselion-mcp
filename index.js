@@ -141,6 +141,10 @@ export function extractRules(skillMd, opts = {}) {
     if (!text) continue;
     text = text.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
     if (text.length < 3) continue;
+    // Skip meta-directives about how the agent should converse (e.g. "DO NOT:
+    // provide any other information until the user asks") - they steer the
+    // agent's response behavior, not the task domain, and pollute a synthesis.
+    if (/until the user asks|do not:? (?:provide|answer|respond|reply|say|mention) any/i.test(text)) continue;
     if (text.length > MAXLEN) text = text.slice(0, MAXLEN - 1).replace(/\s+\S*$/, '') + '…';
     out.push({ text, heading });
     if (out.length >= perSkill) break;
