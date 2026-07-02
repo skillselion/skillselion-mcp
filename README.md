@@ -1,6 +1,11 @@
 <p align="center">
-  <a href="https://skillselion.com"><img src="https://raw.githubusercontent.com/skillselion/skillselion-mcp/master/assets/banner.svg" alt="Skillselion MCP" width="100%"></a>
+  <a href="https://skillselion.com"><img src="https://raw.githubusercontent.com/skillselion/skillselion-mcp/master/assets/banner-v2.svg" alt="Skillselion MCP" width="100%"></a>
 </p>
+
+<p align="center">
+  <a href="https://skillselion.com"><img src="https://raw.githubusercontent.com/skillselion/skillselion-mcp/master/assets/skillselion-site.png" alt="skillselion.com - the #1 directory of Claude Code, Codex & Cursor skills, marketplaces & MCP servers: 86,207 tools total" width="92%"></a>
+</p>
+<p align="center"><sub>The catalog behind it: <a href="https://skillselion.com"><b>skillselion.com</b></a> - 86,000+ skills, plugin marketplaces &amp; MCP servers, ranked by real installs.</sub></p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/skillselion-mcp"><img src="https://img.shields.io/npm/v/skillselion-mcp?style=flat-square&color=0891b2&label=npm" alt="npm version"></a>

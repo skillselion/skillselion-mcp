@@ -19,7 +19,7 @@
 
   <!-- wordmark -->
   <text x="230" y="150" font-family="'Space Grotesk',system-ui,'Segoe UI',sans-serif" font-size="62" font-weight="700" fill="#5b554c" letter-spacing="-1">Skillselion <tspan fill="#0891b2">MCP</tspan></text>
-  <text x="232" y="196" font-family="ui-monospace,'JetBrains Mono',monospace" font-size="22" fill="#797064">Search thousands of Claude Code skills, MCP servers &amp; marketplaces — from your editor.</text>
+  <text x="232" y="196" font-family="ui-monospace,'JetBrains Mono',monospace" font-size="19" fill="#797064">Search thousands of skills, MCP servers &amp; marketplaces — from your editor.</text>
 
   <!-- compatibility pills -->
   <g font-family="ui-monospace,'JetBrains Mono',monospace" font-size="18" font-weight="600">
