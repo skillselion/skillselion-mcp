@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.skillselion/skillselion-mcp",
+  "description": "MCP server that gives your coding agent on-demand access to thousands of community-vetted Claude Code skills - search Skillselion and load_skill a real SKILL.md mid-task, ranked by installs and GitHub stars.",
+  "websiteUrl": "https://skillselion.com",
+  "repository": {
+    "url": "https://github.com/skillselion/skillselion-mcp",
+    "source": "github"
+  },
+  "version": "0.9.6",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "skillselion-mcp",
+      "version": "0.9.6",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
