@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.skillselion/skillselion-mcp",
-  "description": "MCP server that gives your coding agent on-demand access to thousands of community-vetted Claude Code skills - search Skillselion and load_skill a real SKILL.md mid-task, ranked by installs and GitHub stars.",
+  "description": "On-demand access to thousands of install-ranked Claude Code skills - search and load mid-task.",
   "websiteUrl": "https://skillselion.com",
   "repository": {
     "url": "https://github.com/skillselion/skillselion-mcp",
