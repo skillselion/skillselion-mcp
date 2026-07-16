@@ -91,7 +91,7 @@
 
 ## 0.5.3
 
-End-to-end hardening pass (see `docs/feature-status.md` for the full verified surface).
+End-to-end hardening pass completed against the 0.5.3 feature surface.
 
 ### Fixed
 - **load_skill no longer errors on long natural-language queries.** The catalog API rejects an
