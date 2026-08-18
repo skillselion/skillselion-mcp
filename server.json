@@ -7,13 +7,13 @@
     "url": "https://github.com/skillselion/skillselion-mcp",
     "source": "github"
   },
-  "version": "0.9.7",
+  "version": "0.9.8",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "skillselion-mcp",
-      "version": "0.9.7",
+      "version": "0.9.8",
       "transport": {
         "type": "stdio"
       }

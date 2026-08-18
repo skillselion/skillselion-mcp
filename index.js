@@ -18,7 +18,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +26,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.9.7';
+const VERSION = '0.9.8';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -1298,8 +1298,19 @@ async function runSetup() {
 // ---- dispatch ---------------------------------------------------------------
 // Only run when this file is the process entrypoint, so helper tests can
 // `import { queryVariants, ... } from '../index.js'` without starting stdio.
-const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isMain) {
+// realpathSync is required: `npx skillselion-mcp` (and npm's bin) launches via
+// a symlink at node_modules/.bin/skillselion-mcp. path.resolve() keeps the
+// symlink path, import.meta.url is the real index.js, so a naive === skipped
+// runServer() and Cursor saw MCP error -32000 Connection closed (0.9.7).
+function isEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+if (isEntrypoint()) {
   const cmd = process.argv[2];
   if (cmd === 'setup') await runSetup();
   else if (cmd === 'session-context') await printSessionContext();

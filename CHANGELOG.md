@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.8 - 2026-08-18
+
+- **Fix: `npx` / Cursor stdio spawn no longer exits before handshake.** 0.9.7 gated `runServer()` on `path.resolve(argv[1]) === import.meta.url`. npm installs the bin as a symlink (`.bin/skillselion-mcp` → `index.js`); resolve keeps the symlink path, so the process imported the module and exited 0. Cursor logged `MCP error -32000: Connection closed`. Entry detection now uses `realpathSync`. Smoke test covers the symlink launch path.
+
 ## 0.9.7 - 2026-08-18
 
 - **`search_skillselion` skill results now use the same matcher as `load_skill`.** Keyword-only search treated any catalog AND-hit as success, so a task query like "write like a human" returned listings whose descriptions happened to contain filler words (`like`) and never reached `blader/humanizer`. Skill searches now merge keyword + domain-anchor + semantic pools and rank them.
