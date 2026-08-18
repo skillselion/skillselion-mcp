@@ -37,5 +37,11 @@ assert.ok(!isFloor(r3) && /# Skill/.test(r3), 'domain query failed to load: ' + 
 assert.ok(/test|e2e|playwright|webapp/i.test(r3.split('\n')[0]), 'domain pick not topical: ' + r3.split('\n')[0]);
 console.log('[3] domain query loaded ->', r3.split('\n')[0]);
 
+// 4) skill search for a task query must surface the canonical humanizer, not
+//    only listings whose description happened to contain the filler word "like".
+const r4 = txt(await client.callTool({ name: 'search_skillselion', arguments: { query: 'write like a human', type: 'skill', limit: 8 } }));
+assert.ok(/blader\/humanizer/i.test(r4), 'task search missed blader/humanizer:\n' + r4.slice(0, 800));
+console.log('[4] write-like-a-human search includes blader/humanizer OK');
+
 await client.close();
 console.log('\n✓ relevance regression PASSED');

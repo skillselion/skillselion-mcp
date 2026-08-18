@@ -20,12 +20,13 @@ import { z } from 'zod';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.9.6';
+const VERSION = '0.9.7';
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -298,21 +299,28 @@ const STOP = new Set(['build', 'building', 'built', 'create', 'creating', 'make'
   'what', 'when', 'where', 'why', 'which', 'who', 'whom', 'whose', 'is', 'are',
   'was', 'were', 'be', 'can', 'could', 'should', 'would', 'will', 'like', 'about',
   'today', 'now', 'me', 'you', 'they', 'them', 'people', 'someone']);
-function queryVariants(q) {
+export function queryVariants(q) {
   const toks = String(q).toLowerCase().split(/[^a-z0-9+#.]+/i).filter(Boolean);
   const sig = toks.filter((t) => !STOP.has(t));
-  const variants = [q];
-  // Specific -> broad: keep two-word phrases (more precise) before any single
-  // token, so a generic word like "server" is only a last resort.
+  const variants = [];
+  // Significant terms FIRST. The catalog ANDs every whitespace token, so a
+  // wordy query like "write like a human" only matches listings whose
+  // description happens to contain filler ("like"). Those accidental hits
+  // used to count as success, so we never broadened to "human" — which is
+  // how github.com/blader/humanizer (thousands of installs) stayed invisible
+  // next to an 83-install skill whose blurb said "tells like em dashes".
   if (sig.length) variants.push(sig.join(' '));                 // all significant words
   if (sig.length > 2) variants.push(sig.slice(0, 2).join(' ')); // leading pair (often the noun phrase, e.g. "mcp server")
   if (sig.length > 2) variants.push(sig.slice(-2).join(' '));   // trailing pair
   const longest = [...sig].sort((a, b) => b.length - a.length)[0];
   if (longest) variants.push(longest);                          // single most distinctive token, last resort
-  return [...new Set(variants.filter((v) => v && v.trim()))];
+  // Raw query last, and only as fallback. If the query is all stopwords
+  // ("write"), sig is empty and the raw string is the search.
+  if (!sig.length || !variants.includes(q)) variants.push(q);
+  return [...new Set(variants.filter((v) => v && String(v).trim()))];
 }
-/** Like fetchListings but tolerant of wordy queries: tries the full query, then
- *  progressively broader variants, returning the first non-empty hit. */
+/** Like fetchListings but tolerant of wordy queries: tries significant-term
+ *  variants first, then the raw query, returning the first non-empty hit. */
 async function smartFetch(query, params) {
   for (const v of queryVariants(query)) {
     // The catalog API rejects an over-long `q` (HTTP 400). Agents pass verbose
@@ -680,14 +688,28 @@ async function runServer() {
 
   server.tool(
     'search_skillselion',
-    'Search Skillselion, a curated directory of Claude Code agent skills, MCP servers and plugin marketplaces, ranked by real community signal (installs + GitHub stars). Use to browse trusted skills/MCPs/marketplaces for the task at hand (e.g. "postgres", "code review", "playwright"). To actually USE a skill, call load_skill (with an id from here, or directly with a query - it searches for you).',
+    'Search Skillselion, a curated directory of Claude Code agent skills, MCP servers and plugin marketplaces, ranked by real community signal (installs + GitHub stars). Use to browse trusted skills/MCPs/marketplaces for the task at hand (e.g. "postgres", "code review", "playwright"). Skill searches blend keyword + semantic ranking (same matcher as load_skill). To actually USE a skill, call load_skill (with an id from here, or directly with a query - it searches for you).',
     {
       query: z.string().describe('What to search for - a tool, framework, task, or keyword.'),
       type: z.enum(['skill', 'mcp', 'marketplace']).optional().describe('Restrict to one listing type. Omit to search all.'),
       limit: z.number().int().min(1).max(25).optional().describe('Max results (default 8).'),
     },
     async ({ query, type, limit }) => {
-      const { rows, matched } = await smartFetch(query, { ...(type ? { type } : {}), limit: String(limit ?? 8) });
+      const n = limit ?? 8;
+      // Skill search uses the same three-pool ranker as load_skill (keyword on
+      // significant terms + domain-anchor + semantic). Keyword-only smartFetch
+      // treats any AND-hit as success, so a task query like "write like a human"
+      // returned listings that merely contained the filler word "like" and never
+      // reached the actual humanizer skill.
+      if (type === 'skill') {
+        const { adjusted } = await retrieveRankedSkills(query, '', []);
+        const rows = adjusted.slice(0, n).map((a) => a.row);
+        if (rows.length) {
+          const head = `Top ${rows.length} Skillselion results for "${query}" (type: skill):\n`;
+          return { content: [{ type: 'text', text: head + '\n' + rows.map(fmt).join('\n\n') }] };
+        }
+      }
+      const { rows, matched } = await smartFetch(query, { ...(type ? { type } : {}), limit: String(n) });
       if (!rows.length) return { content: [{ type: 'text', text: `No Skillselion results for "${query}". Try a shorter query - a single tool, framework or task (e.g. "postgres", "mcp server", "code review").` }] };
       const note = matched !== query ? ` (broadened to "${matched}")` : '';
       const head = `Top ${rows.length} Skillselion results for "${query}"${note}${type ? ` (type: ${type})` : ''}:\n`;
@@ -1274,7 +1296,12 @@ async function runSetup() {
 }
 
 // ---- dispatch ---------------------------------------------------------------
-const cmd = process.argv[2];
-if (cmd === 'setup') await runSetup();
-else if (cmd === 'session-context') await printSessionContext();
-else await runServer();
+// Only run when this file is the process entrypoint, so helper tests can
+// `import { queryVariants, ... } from '../index.js'` without starting stdio.
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) {
+  const cmd = process.argv[2];
+  if (cmd === 'setup') await runSetup();
+  else if (cmd === 'session-context') await printSessionContext();
+  else await runServer();
+}

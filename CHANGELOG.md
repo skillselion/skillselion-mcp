@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.7 - 2026-08-18
+
+- **`search_skillselion` skill results now use the same matcher as `load_skill`.** Keyword-only search treated any catalog AND-hit as success, so a task query like "write like a human" returned listings whose descriptions happened to contain filler words (`like`) and never reached `blader/humanizer`. Skill searches now merge keyword + domain-anchor + semantic pools and rank them.
+- **`queryVariants` tries significant terms before the raw query.** Catalog search ANDs every whitespace token; sending stopwords first (`like`, `a`, `write`) excluded the right skill. Broader variants are no longer skipped just because the wordy query returned *something*.
+
 ## 0.9.1 - 2026-07-03
 
 - `synthesize_skills`: filter meta-directive rule lines (e.g. "DO NOT: provide any other information until the user asks") out of the merged digest - they steer response behavior, not the task domain.

@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { skillOneLiner, clipSkillMd, filePurpose, buildFilesNote, buildCard } from '../index.js';
+import { skillOneLiner, clipSkillMd, filePurpose, buildFilesNote, buildCard, queryVariants } from '../index.js';
 
 // skillOneLiner: prefers frontmatter description
 const md1 = '---\nname: x\ndescription: Does the thing well\n---\n# X\nbody';
@@ -45,4 +45,12 @@ assert.ok(card.includes('skill:a/b#c'), 'alternate in tldr');
 const bare = buildCard({slug:'x', repo:'o/r', tmpDir:'/t', oneLiner:''});
 assert.ok(bare.startsWith('# Skill loaded: x  (o/r)'));
 assert.ok(!bare.includes('⚠️') && !bare.includes('🔀'), 'no dep/alt lines when absent');
+
+// queryVariants: significant terms before the raw query so catalog AND doesn't
+// require filler words ("like", "a", "write") that hide the real skill.
+const human = queryVariants('write like a human');
+assert.equal(human[0], 'human', 'task query should search the domain noun first, not the raw phrase');
+assert.ok(human.includes('write like a human'), 'raw query stays as fallback');
+assert.deepEqual(queryVariants('playwright e2e tests')[0].split(' ').sort(), ['e2e', 'playwright', 'tests'].sort());
+assert.equal(queryVariants('write')[0], 'write', 'all-stopword query still searches the raw token');
 console.log('response-format ok');
