@@ -22,6 +22,13 @@ async function assertTools(command, args, label) {
   const transport = new StdioClientTransport({ command, args });
   const client = new Client({ name: 'smoke', version: '0' }, { capabilities: {} });
   await client.connect(transport);
+  const info = client.getServerVersion();
+  assert.equal(info?.name, 'skillselion', `${label}: unexpected server name`);
+  assert.equal(info?.title, 'Skillselion', `${label}: missing title`);
+  assert.equal(info?.websiteUrl, 'https://skillselion.com', `${label}: missing websiteUrl`);
+  const icon = info?.icons?.[0];
+  assert.equal(icon?.src, 'https://skillselion.com/icon.png', `${label}: missing brand icon`);
+  assert.equal(icon?.mimeType, 'image/png', `${label}: icon mimeType`);
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
   assert.deepEqual(names, EXPECTED, `${label}: unexpected tools: ${names}`);

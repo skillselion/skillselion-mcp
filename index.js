@@ -26,7 +26,8 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.9.8';
+const VERSION = '0.9.9';
+const SERVER_ICON = `${SITE}/icon.png`;
 const CLIENT_HEADERS = {
   accept: 'application/json',
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
@@ -684,7 +685,14 @@ async function runServer() {
   // prefer already-installed skills and use load_skill for the long tail.
   const gl = (() => { try { return gapLine(localSkills()); } catch { return ''; } })();
   const instructions = gl ? `${SERVER_INSTRUCTIONS}\n\n${gl}` : SERVER_INSTRUCTIONS;
-  const server = new McpServer({ name: 'skillselion', version: VERSION }, { instructions });
+  const server = new McpServer({
+    name: 'skillselion',
+    version: VERSION,
+    title: 'Skillselion',
+    websiteUrl: SITE,
+    // HTTPS PNG, no `sizes` — Cursor once rejected Icon.sizes as an array.
+    icons: [{ src: SERVER_ICON, mimeType: 'image/png' }],
+  }, { instructions });
 
   server.tool(
     'search_skillselion',

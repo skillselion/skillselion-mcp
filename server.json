@@ -1,19 +1,26 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.skillselion/skillselion-mcp",
+  "title": "Skillselion",
   "description": "On-demand access to thousands of install-ranked Claude Code skills - search and load mid-task.",
   "websiteUrl": "https://skillselion.com",
+  "icons": [
+    {
+      "src": "https://skillselion.com/icon.png",
+      "mimeType": "image/png"
+    }
+  ],
   "repository": {
     "url": "https://github.com/skillselion/skillselion-mcp",
     "source": "github"
   },
-  "version": "0.9.8",
+  "version": "0.9.9",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "skillselion-mcp",
-      "version": "0.9.8",
+      "version": "0.9.9",
       "transport": {
         "type": "stdio"
       }

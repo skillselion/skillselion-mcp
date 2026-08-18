@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.9 - 2026-08-18
+
+- **Brand icon on the MCP handshake and registry listing.** `serverInfo` now includes `title`, `websiteUrl`, and a PNG icon (`https://skillselion.com/icon.png`). Same `icons` field on `server.json` for the official MCP Registry. Clients that render server icons (Claude Desktop, MCP Inspector, Copilot) pick it up from initialize; Cursor's settings list still uses HTTP-URL favicons / plugin logos for stdio servers.
+
 ## 0.9.8 - 2026-08-18
 
 - **Fix: `npx` / Cursor stdio spawn no longer exits before handshake.** 0.9.7 gated `runServer()` on `path.resolve(argv[1]) === import.meta.url`. npm installs the bin as a symlink (`.bin/skillselion-mcp` → `index.js`); resolve keeps the symlink path, so the process imported the module and exited 0. Cursor logged `MCP error -32000: Connection closed`. Entry detection now uses `realpathSync`. Smoke test covers the symlink launch path.
