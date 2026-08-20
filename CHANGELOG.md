@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.10 - 2026-08-20
+
+- **Fix: install commands for domain-served skills pointed at a GitHub repo that cannot exist.** Most catalog skills carry a `repo` of `owner/repo`, but some are served straight off a vendor domain and store a bare hostname (`open.feishu.cn`, `open.larksuite.com`, `code.deepline.com`, `docs.stripe.com`, `uizze.com`, `smithery.ai`, ...). `installHint` prefixed every source with `https://github.com/`, so `search_skillselion` printed `npx skills add https://github.com/open.feishu.cn --skill lark-doc` — a single-segment path no GitHub matcher in the skills CLI accepts, which falls through to `git clone` and dies with `repository 'https://github.com/open.feishu.cn/' not found`. Domain sources now emit the plain https origin (`npx skills add https://open.feishu.cn --skill lark-doc`), which the CLI routes to its well-known provider (`/.well-known/agent-skills/` then `/.well-known/skills/`). Around 50 catalog skills were affected, 27 of them on `open.feishu.cn`.
+- Listings for domain-served skills now print `source: <domain>` instead of a bogus `repo: github.com/<domain>`, and the `load_skill` fallback message uses the same corrected install command.
+
 ## 0.9.9 - 2026-08-18
 
 - **Brand icon on the MCP handshake and registry listing.** `serverInfo` now includes `title`, `websiteUrl`, and a PNG icon (`https://skillselion.com/icon.png`). Same `icons` field on `server.json` for the official MCP Registry. Clients that render server icons (Claude Desktop, MCP Inspector, Copilot) pick it up from initialize; Cursor's settings list still uses HTTP-URL favicons / plugin logos for stdio servers.

@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import { skillOneLiner, clipSkillMd, filePurpose, buildFilesNote, buildCard, queryVariants } from '../index.js';
+import { skillOneLiner, clipSkillMd, filePurpose, buildFilesNote, buildCard, queryVariants, installHint, isDomainSource, sourceUrl } from '../index.js';
 
 // skillOneLiner: prefers frontmatter description
 const md1 = '---\nname: x\ndescription: Does the thing well\n---\n# X\nbody';
@@ -53,4 +53,35 @@ assert.equal(human[0], 'human', 'task query should search the domain noun first,
 assert.ok(human.includes('write like a human'), 'raw query stays as fallback');
 assert.deepEqual(queryVariants('playwright e2e tests')[0].split(' ').sort(), ['e2e', 'playwright', 'tests'].sort());
 assert.equal(queryVariants('write')[0], 'write', 'all-stopword query still searches the raw token');
+
+// installHint: a GitHub owner/repo source keeps the github.com URL...
+assert.equal(
+  installHint({ type: 'skill', repo: 'anthropics/skills', id: 'skill:anthropics/skills#frontend-design' }),
+  'npx skills add https://github.com/anthropics/skills --skill frontend-design',
+);
+// ...but a domain-served skill must use its plain https origin. The skills CLI
+// resolves that through its well-known provider; https://github.com/<domain> is
+// a repo that cannot exist and the install fails.
+assert.equal(
+  installHint({ type: 'skill', repo: 'open.feishu.cn', id: 'skill:open.feishu.cn#lark-doc' }),
+  'npx skills add https://open.feishu.cn --skill lark-doc',
+);
+assert.equal(
+  installHint({ type: 'skill', repo: 'docs.stripe.com', id: 'skill:docs.stripe.com#stripe-payments' }),
+  'npx skills add https://docs.stripe.com --skill stripe-payments',
+);
+// marketplace/plugin rows are unaffected
+assert.equal(installHint({ type: 'plugin', repo: 'owner/repo', id: 'plugin:owner/repo' }), '/plugin marketplace add owner/repo');
+
+// isDomainSource: hostnames yes, owner/repo no - including owners and repos that
+// contain dots, which must never be mistaken for a domain.
+for (const d of ['open.feishu.cn', 'code.deepline.com', 'uizze.com', 'smithery.ai', 'skills.volces.com']) {
+  assert.ok(isDomainSource(d), `${d} is a domain source`);
+}
+for (const r of ['anthropics/skills', 'vercel-labs/agent-browser', 'foo.bar/baz.qux', 'owner', '']) {
+  assert.ok(!isDomainSource(r), `${r} is not a domain source`);
+}
+assert.equal(sourceUrl('open.feishu.cn'), 'https://open.feishu.cn');
+assert.equal(sourceUrl('owner/repo'), 'https://github.com/owner/repo');
+
 console.log('response-format ok');

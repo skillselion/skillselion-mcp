@@ -26,7 +26,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.9.9';
+const VERSION = '0.9.10';
 const SERVER_ICON = `${SITE}/icon.png`;
 const CLIENT_HEADERS = {
   accept: 'application/json',
@@ -234,10 +234,19 @@ function listingUrl(row) {
   return `${SITE}/${base}/${segs.map(encodeURIComponent).join('/')}`;
 }
 
-function installHint(row) {
+// A catalog `repo` is usually a GitHub "owner/repo", but some skills are served
+// straight off a vendor domain (open.feishu.cn, docs.stripe.com, uizze.com, ...)
+// and the catalog stores the bare hostname. Those are NOT on GitHub: the skills
+// CLI resolves them through its well-known provider, which needs the plain https
+// origin. `https://github.com/open.feishu.cn` is a single-segment path that no
+// GitHub matcher accepts, so the CLI falls through to `git clone` and fails.
+export const isDomainSource = (repo) => /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(String(repo || '').trim());
+export const sourceUrl = (repo) => (isDomainSource(repo) ? `https://${repo}` : `https://github.com/${repo}`);
+
+export function installHint(row) {
   const id = String(row.id || '');
   const slug = id.includes('#') ? id.slice(id.indexOf('#') + 1) : '';
-  if (row.type === 'skill' && row.repo && slug) return `npx skills add https://github.com/${row.repo} --skill ${slug}`;
+  if (row.type === 'skill' && row.repo && slug) return `npx skills add ${sourceUrl(row.repo)} --skill ${slug}`;
   if ((row.type === 'marketplace' || row.type === 'plugin') && row.repo) return `/plugin marketplace add ${row.repo}`;
   return null;
 }
@@ -250,7 +259,7 @@ function fmt(row) {
   if (row.category) meta.push(row.category);
   if (row.verifiedSafe) meta.push('verified-safe');
   if (meta.length) lines.push(meta.join(' · '));
-  if (row.repo) lines.push(`repo: github.com/${row.repo}`);
+  if (row.repo) lines.push(isDomainSource(row.repo) ? `source: ${row.repo}` : `repo: github.com/${row.repo}`);
   const desc = (row.summary || row.description || '').trim();
   if (desc) lines.push(desc.length > 220 ? desc.slice(0, 217) + '...' : desc);
   const install = installHint(row);
@@ -364,9 +373,9 @@ function recordDemand(sig) {
 }
 
 // load_skill materializes from GitHub raw, so it can only load skills whose repo
-// is a real GitHub "owner/repo" (some catalog skills are hosted elsewhere, e.g.
-// "modelscope.cn", and can't be pulled).
-const isLoadableRepo = (repo) => /^[\w.-]+\/[\w.-]+$/.test(String(repo || ''));
+// is a real GitHub "owner/repo". Domain-served skills (open.feishu.cn and friends)
+// can't be pulled that way - they fall back to the installHint install command.
+const isLoadableRepo = (repo) => !isDomainSource(repo) && /^[\w.-]+\/[\w.-]+$/.test(String(repo || ''));
 
 // Optional GitHub auth for the skill-materializing fetches. An unauthenticated
 // client gets 60 requests/hr (a few load_skills can exhaust it -> the tree API
@@ -828,8 +837,8 @@ async function runServer() {
         }
         // else: this candidate couldn't be materialized - try the next one
       }
-      if (!lastRepo) return { content: [{ type: 'text', text: `Could not resolve a GitHub repo for "${id}".` }] };
-      return { content: [{ type: 'text', text: `Couldn't load "${id}". Install it instead: npx skills add https://github.com/${lastRepo}${lastSlug ? ` --skill ${lastSlug}` : ''}` }] };
+      if (!lastRepo) return { content: [{ type: 'text', text: `Could not resolve a source for "${id}".` }] };
+      return { content: [{ type: 'text', text: `Couldn't load "${id}". Install it instead: npx skills add ${sourceUrl(lastRepo)}${lastSlug ? ` --skill ${lastSlug}` : ''}` }] };
     },
   );
 
