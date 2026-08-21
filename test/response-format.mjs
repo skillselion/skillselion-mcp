@@ -54,6 +54,18 @@ assert.ok(human.includes('write like a human'), 'raw query stays as fallback');
 assert.deepEqual(queryVariants('playwright e2e tests')[0].split(' ').sort(), ['e2e', 'playwright', 'tests'].sort());
 assert.equal(queryVariants('write')[0], 'write', 'all-stopword query still searches the raw token');
 
+// Regression: a noise-only FALLBACK variant matches on coincidence, never
+// domain. This query broadened to "2026 2027" and returned an AutoCAD skill
+// ("AutoCAD 2027 and Visual Studio 2026") plus an unrelated MCP. Years must
+// survive inside the full query (they sharpen it) but never stand alone.
+const soup = queryVariants('2026 2027 UI UX design patterns large catalog search filter directory');
+assert.ok(!soup.includes('2026 2027'), 'noise-only variant must never reach the catalog');
+assert.ok(soup.every((v) => !/^[\d\s]+$/.test(v)), 'no variant may be digits alone');
+assert.ok(soup[0].includes('2026'), 'years still sharpen the full-query variant');
+assert.ok(soup.includes('filter directory') && soup.includes('directory'), 'ladder continues to the real terms');
+// A genuinely numeric query still searches for itself rather than nothing.
+assert.deepEqual(queryVariants('2026'), ['2026'], 'all-noise query keeps its raw token');
+
 // installHint: a GitHub owner/repo source keeps the github.com URL...
 assert.equal(
   installHint({ type: 'skill', repo: 'anthropics/skills', id: 'skill:anthropics/skills#frontend-design' }),

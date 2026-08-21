@@ -196,10 +196,19 @@ export function buildSynthesis({ query, sources, rules, budget = 4000 }) {
 // (Claude Code, Cursor, Codex, …) that surfaces it gets this guidance with no
 // hook/install required. Per MCP best practice it's a concise workflow "user
 // manual", not a behavior-override. https://blog.modelcontextprotocol.io/posts/2025-11-03-using-server-instructions/
+// How to write a `query`, stated once and reused by both search tools. Agents
+// arrive assuming a web search engine, where more terms = better recall. This
+// catalog ANDs every token, so the opposite is true - and nothing told them.
+// That is how a caller doing SEO work sent "2026 2027 UI UX design patterns
+// large catalog search filter directory" and got an AutoCAD skill back.
+const QUERY_GUIDANCE = 'The task or domain in plain words - 2-6 words, ONE topic (e.g. "postgres row level security", "react component testing", "stripe webhooks"). The catalog matches EVERY word, so extra words return WORSE results, not more: no keyword soup, no synonym lists, no years or version numbers (those go in `context`). If the results look wrong, retry with FEWER words - never more.';
+
 const SERVER_INSTRUCTIONS = [
   'Skillselion is a directory of thousands of community-vetted Claude Code skills - each a real SKILL.md plus bundled scripts/references, ranked by install count.',
   '',
   'Recommended workflow - DEFAULT TO LOADING: before you write tests, frontend/UI, an API/DB layer, infra/Docker/CI, or framework-specific code (esp. a fast-moving stack like a payments/auth/cloud SDK), call load_skill FIRST - pass your task as `query` and your stack + constraints as `context` (required) - then follow it instead of reciting best practices from memory. It ranks candidates against your context and current repo, materializes the best match (SKILL.md + files into a temp folder, used like an installed skill), returns runner-up candidates you can switch to, and flags heavy dependencies. Verify the loaded skill against your project before trusting it.',
+  '',
+  'Writing a good `query`: 2-6 words, ONE topic - "postgres row level security", "react component testing", "stripe webhooks". The catalog matches EVERY word, so a long keyword-soup query returns worse results, not more. Versions, years and constraints belong in `context` (ranking only), never in `query`. If the results look off, retry with FEWER words - never more.',
   '',
   'It is safe to over-ask: loading is read-only and cheap, and if nothing matches load_skill tells you so. Use search_skillselion to browse options, top_skillselion for the leaderboard. If you do not see a `load_skill` tool, your client may surface MCP tools lazily - search your available tools for "skillselion" (e.g. via ToolSearch) first, then call it.',
 ].join('\n');
@@ -309,6 +318,17 @@ const STOP = new Set(['build', 'building', 'built', 'create', 'creating', 'make'
   'what', 'when', 'where', 'why', 'which', 'who', 'whom', 'whose', 'is', 'are',
   'was', 'were', 'be', 'can', 'could', 'should', 'would', 'will', 'like', 'about',
   'today', 'now', 'me', 'you', 'they', 'them', 'people', 'someone']);
+// A token with no domain signal on its own: a bare year or any pure number.
+// It is deliberately NOT a stopword - inside a full query it SHARPENS the match
+// ("next.js 15 app router"). But a fallback variant built only from these
+// matches on coincidence alone: the query "2026 2027 UI UX design patterns
+// large catalog search filter directory" fell back to "2026 2027" and returned
+// an AutoCAD skill whose text says "AutoCAD 2027 and Visual Studio 2026".
+const isNoiseToken = (t) => /^\d+$/.test(t);
+export function _allNoise(v) {
+  const t = String(v).toLowerCase().split(/[^a-z0-9+#.]+/i).filter(Boolean);
+  return t.length > 0 && t.every(isNoiseToken);
+}
 export function queryVariants(q) {
   const toks = String(q).toLowerCase().split(/[^a-z0-9+#.]+/i).filter(Boolean);
   const sig = toks.filter((t) => !STOP.has(t));
@@ -327,7 +347,11 @@ export function queryVariants(q) {
   // Raw query last, and only as fallback. If the query is all stopwords
   // ("write"), sig is empty and the raw string is the search.
   if (!sig.length || !variants.includes(q)) variants.push(q);
-  return [...new Set(variants.filter((v) => v && String(v).trim()))];
+  const out = [...new Set(variants.filter((v) => v && String(v).trim()))];
+  // Drop noise-only variants ("2026 2027") - but only while a real variant
+  // survives, so a genuinely numeric query still searches for itself.
+  const useful = out.filter((v) => !_allNoise(v));
+  return useful.length ? useful : out;
 }
 /** Like fetchListings but tolerant of wordy queries: tries significant-term
  *  variants first, then the raw query, returning the first non-empty hit. */
@@ -652,8 +676,18 @@ async function loadSkillFromCatalog(id) {
 // rankCandidates/applyLessons produce (each row has .row/.qStrong/.semStrong/
 // .semanticDistance/.score/.why), or an empty array when nothing is found. The
 // relevance-floor decision stays in load_skill, which reads adjusted[0].
+// The relevance floor, shared by load_skill and search_skillselion: a ranked
+// candidate is only worth returning when it hits a CURATED field with a real
+// topical term, or is a close semantic match. Full rationale at its use site in
+// load_skill. Search applies it too, so a wordy query gets an honest "no match"
+// instead of whatever the keyword fallback happened to scrape up.
+const clearsFloor = (a) => !!a && (a.qStrong >= FLOOR_MIN_QSTRONG || a.semStrong);
+
 async function retrieveRankedSkills(query, context, repoCats) {
-  const broad = sigTerms(query)[0]; // domain anchor (first significant word, e.g. "mcp"), NOT a generic long token like "server" that floods the pool
+  // Domain anchor (first significant word, e.g. "mcp"), NOT a generic long token
+  // like "server" that floods the pool - and NOT a bare year/number, which would
+  // anchor the whole broad pool on coincidence (see isNoiseToken).
+  const broad = sigTerms(query).find((t) => !isNoiseToken(t));
   // Three pools, merged + de-duped: (1) keyword on the full query, (2) keyword
   // on the domain anchor, (3) SEMANTIC - the catalog's embedding-ranked pool
   // for the same query. (3) is the recall fix: it surfaces concept matches
@@ -707,28 +741,46 @@ async function runServer() {
     'search_skillselion',
     'Search Skillselion, a curated directory of Claude Code agent skills, MCP servers and plugin marketplaces, ranked by real community signal (installs + GitHub stars). Use to browse trusted skills/MCPs/marketplaces for the task at hand (e.g. "postgres", "code review", "playwright"). Skill searches blend keyword + semantic ranking (same matcher as load_skill). To actually USE a skill, call load_skill (with an id from here, or directly with a query - it searches for you).',
     {
-      query: z.string().describe('What to search for - a tool, framework, task, or keyword.'),
+      query: z.string().describe(QUERY_GUIDANCE),
+      context: z.string().optional().describe('Optional: your stack + constraints (e.g. "Next.js 15 App Router, TypeScript, no new deps"). Used for RANKING only, never for keyword matching - so versions, years and situational detail belong here, not in `query`.'),
       type: z.enum(['skill', 'mcp', 'marketplace']).optional().describe('Restrict to one listing type. Omit to search all.'),
       limit: z.number().int().min(1).max(25).optional().describe('Max results (default 8).'),
     },
-    async ({ query, type, limit }) => {
+    async ({ query, context, type, limit }) => {
       const n = limit ?? 8;
-      // Skill search uses the same three-pool ranker as load_skill (keyword on
-      // significant terms + domain-anchor + semantic). Keyword-only smartFetch
-      // treats any AND-hit as success, so a task query like "write like a human"
-      // returned listings that merely contained the filler word "like" and never
-      // reached the actual humanizer skill.
-      if (type === 'skill') {
-        const { adjusted } = await retrieveRankedSkills(query, '', []);
-        const rows = adjusted.slice(0, n).map((a) => a.row);
-        if (rows.length) {
-          const head = `Top ${rows.length} Skillselion results for "${query}" (type: skill):\n`;
-          return { content: [{ type: 'text', text: head + '\n' + rows.map(fmt).join('\n\n') }] };
-        }
+      // Skill results ALWAYS go through the same three-pool ranker as load_skill
+      // (keyword on significant terms + domain-anchor + SEMANTIC), then the same
+      // relevance floor - not just when type==='skill'. Keyword-only smartFetch
+      // accepts the FIRST variant that returns anything, so an untyped wordy
+      // query used to stop on a junk fallback and present the scrapings as
+      // results. Ranking + the floor make that impossible, and the semantic pool
+      // reaches concept matches no keyword variant would ever fetch.
+      let skillRows = [];
+      if (type !== 'mcp' && type !== 'marketplace') {
+        const { adjusted } = await retrieveRankedSkills(query, context || '', []);
+        skillRows = adjusted.filter(clearsFloor).slice(0, n).map((a) => a.row);
       }
-      const { rows, matched } = await smartFetch(query, { ...(type ? { type } : {}), limit: String(n) });
-      if (!rows.length) return { content: [{ type: 'text', text: `No Skillselion results for "${query}". Try a shorter query - a single tool, framework or task (e.g. "postgres", "mcp server", "code review").` }] };
-      const note = matched !== query ? ` (broadened to "${matched}")` : '';
+      // Non-skill listings have no embedding pool, so they stay on the keyword
+      // path. Skills are dropped from it - they are already ranked above.
+      let otherRows = [], matched = query;
+      if (type !== 'skill') {
+        const r = await smartFetch(query, { ...(type ? { type } : {}), limit: String(n) });
+        // Score the keyword rows on curated-field hits and demand real topical
+        // overlap - smartFetch's first-hit-wins ladder has no opinion about
+        // relevance. The bar ADAPTS to the query: a one-word search ("postgres")
+        // can only ever hit once, while a wordy one must hit FLOOR_MIN_QSTRONG
+        // times. That is what stops a broadened fallback (the single word
+        // "retirement" out of "best wine to bring to a retirement party") from
+        // presenting a retirement-planning MCP as a result.
+        const need = Math.min(FLOOR_MIN_QSTRONG, Math.max(1, sigTerms(query).length));
+        otherRows = rankCandidates(r.rows.filter((row) => row.type !== 'skill'), query, context || '', [])
+          .filter((a) => a.qStrong >= need)
+          .map((a) => a.row);
+        matched = r.matched;
+      }
+      const rows = [...skillRows, ...otherRows].slice(0, n);
+      if (!rows.length) return { content: [{ type: 'text', text: `No Skillselion result clearly matches "${query}". The catalog matches EVERY word, so a long query returns less, not more - retry with FEWER words: one tool, framework or task (e.g. "postgres", "mcp server", "code review").` }] };
+      const note = otherRows.length && matched !== query ? ` (broadened to "${matched}")` : '';
       const head = `Top ${rows.length} Skillselion results for "${query}"${note}${type ? ` (type: ${type})` : ''}:\n`;
       return { content: [{ type: 'text', text: head + '\n' + rows.map(fmt).join('\n\n') }] };
     },
@@ -738,7 +790,7 @@ async function runServer() {
     'load_skill',
     'Load a community-vetted skill into your context on demand - like installing it mid-task. Reach for this when a task is in a domain a skill likely covers (tests, frontend/UI, an API/DB, infra, a named framework) and a proven recipe would beat improvising - most valuable in territory you are less sure of, or fast-moving stacks where your memory may be stale. You MUST pass `context` (your task + stack + constraints): it ranks candidates, fits them to your current repo, flags dependency mismatches, and keeps the load deliberate. Returns the best match (real SKILL.md + bundled scripts/refs materialized to a temp folder, used like an installed skill) PLUS the next-best candidates so you can switch. Always verify the loaded skill against your project before trusting it. For broad "current best practices across the field" tasks that span several skills, use synthesize_skills instead.',
     {
-      query: z.string().optional().describe('What you need - task/skill keywords (e.g. "playwright e2e tests"). Required unless you pass an exact id.'),
+      query: z.string().optional().describe('What you need, in plain words - 2-6 words, ONE topic (e.g. "playwright e2e tests"). The catalog matches EVERY word, so extra words return WORSE results, not more: keep versions, years, stack detail and constraints in `context`, never here. Required unless you pass an exact id.'),
       context: z.string().describe('REQUIRED. What you are actually doing + your stack + constraints/anti-patterns (e.g. "Next.js marketing page, no new deps, role-based locators"). Ranks candidates, fits them to your repo, and flags dependency mismatches. Be specific - this also keeps the load deliberate, not reflexive.'),
       id: z.string().optional().describe('An exact skill id from search_skillselion, e.g. "skill:owner/repo#slug".'),
     },
@@ -770,7 +822,7 @@ async function runServer() {
         // the floor on keyword alone. At 1, a single generic word (e.g. "DBA" in
         // "best wine for DBA retirement") clears it; raise to 2 so an off-topic
         // query needs ≥2 real topical terms OR a close semantic match to load.
-        if (adjusted[0].qStrong < FLOOR_MIN_QSTRONG && !adjusted[0].semStrong) {
+        if (!clearsFloor(adjusted[0])) {
           recordDemand({ query, context, matched: false, topScore: adjusted[0].score });
           const near = adjusted.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
           return { content: [{ type: 'text', text:
@@ -947,6 +999,7 @@ const PRIMING_DIRECTIVE = [
   '',
   'DEFAULT TO LOADING: before you write tests, frontend/UI, an API/DB layer, infra/CI, or framework-specific code (esp. a fast-moving stack like a payments/auth/cloud SDK), call load_skill FIRST - pass your task as `query` and your stack + constraints as `context` (required) - then FOLLOW the loaded skill instead of reciting "best practices" from memory. A 5-second load beats shipping a stale or naive pattern.',
   'It is safe to over-ask: if nothing matches, load_skill tells you so and costs almost nothing. It returns the best match PLUS runner-up candidates and flags heavy dependencies - pick deliberately, verify against your project, and ignore a skill that does not fit.',
+  'Keep `query` SHORT - 2-6 words, ONE topic ("react component testing"). The catalog matches EVERY word, so keyword soup and stray years/versions return worse results; put those in `context`. Bad results? Retry with FEWER words.',
   'If you do not see a `load_skill` tool, your client may surface MCP tools lazily - search your available tools for "skillselion" (e.g. via ToolSearch) first, then call it.',
 ];
 const PRIMING_FOOTER = 'load_skill(query, context) searches + loads + shows alternates · search_skillselion(query) browses · top_skillselion lists the best.';
