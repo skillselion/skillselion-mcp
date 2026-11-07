@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.12 - 2026-11-08
+
+- **The demand signal now says how good the pick was, not only what was asked.** Each `load_skill` signal carries the ids and scores of the top 10 candidates the matcher ranked, a random per-process run id (a quick re-ask in the same run means the pick likely missed), and the client version. Still never sent: your code, files, or the `context` you pass. `DO_NOT_TRACK=1` still turns the whole signal off.
+- **`SK_INTERNAL=1`** tags the signal as the operator's own use, so it stays out of quality evals.
+- **Fix: the test and eval harnesses no longer log their runs as real demand** (they set `SK_NO_DEMAND=1`).
+- **Fix: `serverInfo.version` and the user-agent said `0.9.10` in 0.9.11.** The `VERSION` constant now matches `package.json`.
+
 ## 0.9.11 - 2026-08-21
 
 - **Fix: a wordy query could fall back to a noise-only variant and present the scrapings as results.** `search_skillselion` with `query: "2026 2027 UI UX design patterns large catalog search filter directory"` and no `type` returned an AutoCAD plug-in skill (its text says "AutoCAD 2027 and Visual Studio 2026") and an unrelated MCP. Three causes, all fixed: (1) `queryVariants` built a leading-pair fallback of `"2026 2027"`, and `smartFetch` accepts the FIRST variant that returns anything, so the ladder stopped there and never reached `"filter directory"` / `"directory"`; (2) the ranked+semantic matcher only ran when `type === 'skill'`, so an untyped search silently used keyword-only matching; (3) nothing checked relevance before presenting results. The same query now returns `search-results`, `filter-panel`, `search-field`, `search-ux`, `card-grid`, `ui-design-patterns`.

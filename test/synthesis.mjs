@@ -96,7 +96,7 @@ console.log(`\nsynthesis offline: ${pass} passed`);
 if (process.argv.includes('--live')) {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
-  const transport = new StdioClientTransport({ command: 'node', args: ['index.js'], env: { ...process.env } });
+  const transport = new StdioClientTransport({ command: 'node', args: ['index.js'], env: { ...process.env, SK_NO_DEMAND: '1' } });
   const client = new Client({ name: 'synth-smoke', version: '0' });
   await client.connect(transport);
   const res = await client.callTool({ name: 'synthesize_skills', arguments: {
