@@ -16,7 +16,7 @@ const txt = (r) => (r.content || []).map((c) => c.text || '').join('\n');
 // Forward the parent env so the server picks up GITHUB_TOKEN (raises the GitHub
 // rate limit 60->5000/hr); without it the tree API can 403 and the multi-file
 // materialize assertion flakes under repeated runs.
-const transport = new StdioClientTransport({ command: 'node', args: ['index.js'], env: { ...process.env } });
+const transport = new StdioClientTransport({ command: 'node', args: ['index.js'], env: { ...process.env, SK_NO_DEMAND: '1' } });
 const client = new Client({ name: 'live', version: '0' }, { capabilities: {} });
 await client.connect(transport);
 

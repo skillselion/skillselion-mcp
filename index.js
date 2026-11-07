@@ -21,6 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { emitKeypressEvents } from 'node:readline';
 
@@ -375,11 +376,21 @@ async function smartFetch(query, params) {
 // asked for and whether it matched, so unmet demand surfaces gaps to fill (the
 // ingestion flywheel). Best-effort - never awaited, never throws, short timeout;
 // the tool works identically if this endpoint is down.
+// RUN_ID = random per server process (not a user or machine id) so the catalog
+// can tell "asked again right after" (the pick missed) from "kept the pick".
+// SK_INTERNAL=1 marks the operator's own sessions so evals can drop them.
+const RUN_ID = randomUUID();
+const INTERNAL = !!process.env.SK_INTERNAL;
+// The ranked pool the pick came from (catalog ids + scores only), so an eval can
+// replay the exact choice the matcher saw.
+const candidatesOf = (adjusted) => adjusted.slice(0, 10).map((a) => ({
+  id: a.row.id, score: Math.round(a.score * 100) / 100, sd: a.semanticDistance ?? null,
+}));
 function recordDemand(sig) {
   // Privacy: honor DO_NOT_TRACK / SK_NO_DEMAND (either one disables the demand
   // signal entirely), and never transmit the caller's `context` (their task,
-  // stack and constraints). Only the query, the match outcome and the picked
-  // skill id ever leave the machine.
+  // stack and constraints). Only the query, the match outcome, the picked
+  // skill id, the candidate catalog ids and the random RUN_ID leave the machine.
   if (process.env.DO_NOT_TRACK || process.env.SK_NO_DEMAND) return;
   try {
     const ctl = new AbortController();
@@ -390,7 +401,7 @@ function recordDemand(sig) {
     fetch(`${API}/mcp/demand`, {
       method: 'POST',
       headers: { ...CLIENT_HEADERS, 'content-type': 'application/json' },
-      body: JSON.stringify({ ...safe, client: CLIENT_HEADERS['user-agent'] }),
+      body: JSON.stringify({ ...safe, runId: RUN_ID, internal: INTERNAL, client: CLIENT_HEADERS['user-agent'] }),
       signal: ctl.signal,
     }).catch(() => {}).finally(() => clearTimeout(t));
   } catch { /* never break the tool */ }
@@ -681,9 +692,9 @@ async function loadSkillFromCatalog(id) {
 // topical term, or is a close semantic match. Full rationale at its use site in
 // load_skill. Search applies it too, so a wordy query gets an honest "no match"
 // instead of whatever the keyword fallback happened to scrape up.
-const clearsFloor = (a) => !!a && (a.qStrong >= FLOOR_MIN_QSTRONG || a.semStrong);
+export const clearsFloor = (a) => !!a && (a.qStrong >= FLOOR_MIN_QSTRONG || a.semStrong);
 
-async function retrieveRankedSkills(query, context, repoCats) {
+export async function retrieveRankedSkills(query, context, repoCats) {
   // Domain anchor (first significant word, e.g. "mcp"), NOT a generic long token
   // like "server" that floods the pool - and NOT a bare year/number, which would
   // anchor the whole broad pool on coincidence (see isNoiseToken).
@@ -797,7 +808,7 @@ async function runServer() {
     async ({ id, query, context }) => {
       if (!context || !String(context).trim()) return { content: [{ type: 'text', text: 'load_skill needs `context` — tell me what you are doing + your stack + constraints (e.g. "Next.js marketing page, no new deps, role-based locators"). It makes the match accurate, fits the skill to your repo, and keeps the load deliberate.' }] };
       const repoCats = (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
-      let row, alternates = [], topScore, picks;
+      let row, alternates = [], topScore, picks, candidates;
       if (!id) {
         if (!query) return { content: [{ type: 'text', text: 'Provide a `query` (what you need) or an exact `id`. (`context` is also required.)' }] };
         // Widen the candidate pool (specific query + broadest term) so a canonical
@@ -823,7 +834,7 @@ async function runServer() {
         // "best wine for DBA retirement") clears it; raise to 2 so an off-topic
         // query needs ≥2 real topical terms OR a close semantic match to load.
         if (!clearsFloor(adjusted[0])) {
-          recordDemand({ query, context, matched: false, topScore: adjusted[0].score });
+          recordDemand({ query, context, matched: false, topScore: adjusted[0].score, candidates: candidatesOf(adjusted) });
           const near = adjusted.slice(0, 3).map((a) => `\`${a.row.id}\` (${a.why})`).join(', ');
           return { content: [{ type: 'text', text:
             `No skill on Skillselion clearly matches "${query}". The closest by popularity (${near}) don't match your task, so loading one likely won't help — proceed with your own approach, or call load_skill again with a more specific query / use search_skillselion to browse.` }] };
@@ -833,6 +844,7 @@ async function runServer() {
         topScore = adjusted[0].score;
         id = row.id;
         picks = adjusted.slice(0, 3).map((a) => ({ id: a.row.id, row: a.row, why: a.why, semanticDistance: a.semanticDistance }));
+        candidates = candidatesOf(adjusted);
       }
       // The ordered list we'll actually try to materialize: the ranked pick + its
       // runners-up (query path), or just the one explicit id. A top pick that
@@ -849,7 +861,7 @@ async function runServer() {
         .filter((_, i) => i !== usedIdx).filter((p) => p.why)
         .map((p) => `\`${p.id}\``).join(' · ');
 
-      recordDemand({ query: query || picks[0].id, context, matched: true, skillId: picks[0].id, topScore, semanticDistance: picks[0].semanticDistance ?? undefined });
+      recordDemand({ query: query || picks[0].id, context, matched: true, skillId: picks[0].id, topScore, semanticDistance: picks[0].semanticDistance ?? undefined, candidates });
       let lastRepo = '', lastSlug = '';
       for (let k = 0; k < picks.length; k++) {
         const cid = picks[k].id;

@@ -5,7 +5,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import assert from 'node:assert/strict';
 
 const txt = (r) => (r.content || []).map((c) => c.text || '').join('\n');
-const transport = new StdioClientTransport({ command: 'node', args: ['index.js'] });
+const transport = new StdioClientTransport({ command: 'node', args: ['index.js'], env: { ...process.env, SK_NO_DEMAND: '1' } });
 const client = new Client({ name: 'verbose', version: '0' }, { capabilities: {} });
 await client.connect(transport);
 

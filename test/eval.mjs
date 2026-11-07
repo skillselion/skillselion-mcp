@@ -90,7 +90,7 @@ async function runPass(client) {
 }
 
 const passes = Math.max(1, parseInt(process.argv[2] || '1', 10));
-const transport = new StdioClientTransport({ command: 'node', args: ['index.js'], env: { ...process.env } });
+const transport = new StdioClientTransport({ command: 'node', args: ['index.js'], env: { ...process.env, SK_NO_DEMAND: '1' } });
 const client = new Client({ name: 'eval', version: '0' }, { capabilities: {} });
 await client.connect(transport);
 

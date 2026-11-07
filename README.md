@@ -62,7 +62,7 @@ Want it fully automatic? `npx -y skillselion-mcp setup` registers the server **a
 
 ## 🔒 Private by default
 
-Read-only, no auth, no secrets. It never sends your code, files, or the `context` you pass - only a scrubbed search query + which skill matched, so the catalog learns what to add next. Set `DO_NOT_TRACK=1` to disable even that.
+Read-only, no auth, no secrets. It never sends your code, files, or the `context` you pass - only a scrubbed search query, which skill matched, the ids of the candidate skills it ranked, and a random per-process run id (not tied to you or your machine), so the catalog learns what to add next and how well it picks. Set `DO_NOT_TRACK=1` to disable even that.
 
 ## 🪄 Skill autopilot
 
@@ -100,6 +100,7 @@ Safe by design: `~/.claude/settings.json` is merged, never clobbered; re-running
 | `SK_SYNTH_PER_SKILL` | `12` | max rules kept per source skill |
 | `SK_SYNTH_BUDGET` | `4000` | char cap on the merged digest |
 | `DO_NOT_TRACK` | - | set `1` to disable the anonymous demand signal |
+| `SK_INTERNAL` | - | set `1` to tag the demand signal as the operator's own use (kept out of evals) |
 </details>
 
 <details>
