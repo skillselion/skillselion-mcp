@@ -27,7 +27,7 @@ import { emitKeypressEvents } from 'node:readline';
 
 const API = 'https://skillselion.com/api/upstream';
 const SITE = 'https://skillselion.com';
-const VERSION = '0.9.10';
+const VERSION = '0.9.12';
 const SERVER_ICON = `${SITE}/icon.png`;
 const CLIENT_HEADERS = {
   accept: 'application/json',
