@@ -1149,6 +1149,15 @@ async function runHttp() {
     const { pathname } = new URL(req.url || '/', 'http://localhost');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
     if (pathname === '/health') return json(res, 200, { ok: true, version: VERSION });
+    // OpenAI plugin directory domain proof: the portal shows a token that must be
+    // served as plain text here. Set OPENAI_APPS_CHALLENGE on the host; 404 until then.
+    if (pathname === '/.well-known/openai-apps-challenge' && req.method === 'GET') {
+      const token = (process.env.OPENAI_APPS_CHALLENGE || '').trim();
+      if (!token) return json(res, 404, { error: 'not configured' });
+      res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(token);
+      return;
+    }
     // Claude shows a connector's favicon from its server URL. Serve the brand
     // icon bytes (not a redirect, which some favicon fetchers do not follow).
     if ((pathname === '/favicon.ico' || pathname === '/icon.png') && req.method === 'GET') {

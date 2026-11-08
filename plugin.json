@@ -1,0 +1,108 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "skillselion",
+  "version": "1.0.0",
+  "description": "Search and load community agent skills (real SKILL.md files with their scripts), MCP servers and plugin marketplaces from the Skillselion catalog, ranked by installs. Read-only, no sign-in.",
+  "author": {
+    "name": "Ellelion LLC",
+    "email": "info@skillselion.com",
+    "url": "https://skillselion.com"
+  },
+  "homepage": "https://skillselion.com/skillselion-mcp",
+  "repository": "https://github.com/skillselion/skillselion-mcp",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "agent-skills",
+    "mcp",
+    "claude-code",
+    "catalog",
+    "developer-tools"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Skillselion",
+        "shortDescription": "Find and load agent skills",
+        "longDescription": "Skillselion is a catalog of more than 80,000 community agent skills, MCP servers and plugin marketplaces for coding agents, ranked by real installs and GitHub stars.\n\nWith this plugin you can:\n- Search skills, MCP servers and marketplaces by task or tool name.\n- Load one skill: its SKILL.md, the list of its bundled files and two alternatives.\n- Read any bundled script, reference or template of a loaded skill.\n- Merge the rules of the top matching skills into one deduplicated checklist, each rule tagged with its source.\n- See the most-installed skills and most-starred MCP servers.\n\nIntended for developers who use coding agents. Every tool is read-only and needs no account. Skills are community-authored and open source; each result names its source repository so you can review it before you apply it. The plugin does not write to your files or install anything.",
+        "developerName": "Ellelion LLC",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Search skills and MCP servers",
+          "Load a skill's SKILL.md",
+          "Read bundled skill files",
+          "Merge rules across skills",
+          "Show the leaderboard"
+        ],
+        "websiteURL": "https://skillselion.com",
+        "supportURL": "https://skillselion.com/contact",
+        "privacyPolicyURL": "https://skillselion.com/privacy",
+        "termsOfServiceURL": "https://skillselion.com/terms",
+        "defaultPrompt": [
+          "Find a skill for writing Playwright end-to-end tests and load it.",
+          "What are the most-installed Claude Code skills right now?",
+          "Search for an MCP server that works with Postgres."
+        ],
+        "brandColor": "#0E7C7B",
+        "brandColorDark": "#5FC4C0",
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/logo.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Load a skill for a coding task",
+              "prompt": "Find a skill for writing Playwright end-to-end tests and load it.",
+              "tools_triggered": "load_skill",
+              "expected_behavior": "Returns one community Playwright testing skill: its SKILL.md text, the list of its bundled files, the source repository, and up to two alternative skills."
+            },
+            {
+              "description": "Read a bundled file of a loaded skill",
+              "prompt": "Show me one of the bundled files of that Playwright skill.",
+              "tools_triggered": "load_skill, read_skill_file",
+              "expected_behavior": "Returns the full text of one file listed under Bundled files in the load_skill result, headed by the skill id and file path."
+            },
+            {
+              "description": "Search the catalog for MCP servers",
+              "prompt": "Search Skillselion for an MCP server that works with Postgres.",
+              "tools_triggered": "search_skillselion",
+              "expected_behavior": "Returns up to 8 Postgres MCP server listings, each with a summary, GitHub stars or installs, the repository and a skillselion.com link."
+            },
+            {
+              "description": "Show the leaderboard",
+              "prompt": "What are the 5 most-installed Claude Code skills on Skillselion right now?",
+              "tools_triggered": "top_skillselion",
+              "expected_behavior": "Returns the top 5 skills ranked by installs, each with its install count, summary, install command and a skillselion.com link."
+            },
+            {
+              "description": "Merge guidance from several skills",
+              "prompt": "Combine the community skills on React component testing into one checklist for my Vite app.",
+              "tools_triggered": "synthesize_skills",
+              "expected_behavior": "Returns a deduplicated list of rules merged from up to 5 React testing skills, each rule tagged with its source skill, plus the source skill ids."
+            }
+          ],
+          "negative": [
+            {
+              "description": "Write files to the user's project",
+              "prompt": "Install the Playwright skill into my repository and commit it."
+            },
+            {
+              "description": "Delete or edit catalog data",
+              "prompt": "Delete the find-skills listing from Skillselion."
+            },
+            {
+              "description": "Request outside the catalog's scope",
+              "prompt": "Book me a table for two at an Italian restaurant tonight."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "This plugin does not sell products or process payments."
+      },
+      "publication": {
+        "release_notes": "Initial release: search, load_skill, read_skill_file, synthesize_skills and the leaderboard over the public Skillselion catalog."
+      }
+    }
+  }
+}
