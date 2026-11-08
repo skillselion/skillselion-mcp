@@ -2,8 +2,13 @@
 /**
  * Skillselion MCP server + installer.
  *
- * Three modes (dispatched on argv):
+ * Four modes (dispatched on argv):
  *   (default)         - run the MCP server over stdio (what an MCP client launches)
+ *   http              - run the same tools as a REMOTE server (stateless Streamable
+ *                       HTTP at POST /mcp, PORT env, default 3000). This is the
+ *                       mcp.skillselion.com connector: a remote server cannot write
+ *                       to the caller's disk, so load_skill returns SKILL.md inline
+ *                       and read_skill_file serves bundled files on demand.
  *   setup             - register the server globally + install a SessionStart hook
  *                       that primes every Claude Code session with the top skills
  *   session-context   - print the SessionStart additionalContext (used by the hook)
@@ -34,6 +39,12 @@ const CLIENT_HEADERS = {
   'user-agent': `skillselion-mcp/${VERSION} (+https://github.com/skillselion/skillselion-mcp)`,
   'x-skillselion-client': 'mcp',
 };
+// Set once at dispatch by `http` mode. A process is either a local stdio server
+// or the remote one, never both, so a module flag beats threading it everywhere.
+let REMOTE = false;
+// Every tool only GETs the public catalog + public GitHub files. These hints are
+// what clients (and the Claude Connectors Directory review) read to know that.
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true };
 
 // Client-side query scrub - strips secrets/PII before the (fire-and-forget)
 // demand signal leaves the machine. Mirrors the server's scrub.ts EXACTLY
@@ -98,15 +109,32 @@ export function buildFilesNote(tmpDir, files) {
   return `## Bundled files (in ${tmpDir})\n${lines}\n\nRead or run these from that folder on demand, exactly as the SKILL.md directs.`;
 }
 
+// Remote twin of buildFilesNote: nothing is on the caller's disk, so each file is
+// fetched through read_skill_file instead of read from a folder.
+export function buildRemoteFilesNote(id, files) {
+  if (!files || !files.length) return '## Bundled files: none - this skill is just its SKILL.md.';
+  const lines = files.map((f) => `- ${f.rel}${f.purpose ? ' - ' + f.purpose : ''}`).join('\n');
+  return `## Bundled files\n${lines}\n\nFetch any of these on demand with read_skill_file (id \`${id}\`, path as listed), exactly as the SKILL.md directs.`;
+}
+
 // Emoji TL;DR headline for a loaded skill. The FIRST line stays the machine-
 // parseable `# Skill loaded: <slug>  (<repo>)` (clients + the eval key off it);
 // the emoji lines under it are the human-scannable summary a person sees in the
 // terminal, while the full SKILL.md + files (for the agent) follow below.
-export function buildCard({ slug, repo, tmpDir, oneLiner, fileCount = 0, depNeeds = '', alts = '' }) {
+export function buildCard({ slug, repo, tmpDir, oneLiner, fileCount = 0, depNeeds = '', alts = '', remote = false }) {
   const head = `# Skill loaded: ${slug || repo}  (${repo})`;
   const tl = ['', `✅ **${slug || repo}**  ·  \`${repo}\``];
   const ol = oneLiner && oneLiner.length > 130 ? oneLiner.slice(0, 127).replace(/\s+\S*$/, '') + '…' : oneLiner;
   if (ol) tl.push(`🎯 ${ol}`);
+  if (remote) {
+    tl.push(fileCount > 0
+      ? `📂 SKILL.md below + ${fileCount} bundled file(s) - fetch them with read_skill_file`
+      : `📂 SKILL.md below`);
+    if (depNeeds) tl.push(`⚠️ Needs: ${depNeeds} - check against your project first.`);
+    if (alts) tl.push(`🔀 Or switch to: ${alts}`);
+    tl.push(`📖 Follow the SKILL.md below - that is the full skill.`);
+    return head + tl.join('\n');
+  }
   if (!tmpDir) tl.push(`📂 SKILL.md shown below (bundled files unavailable this time).`);
   else tl.push(fileCount > 0
     ? `📂 SKILL.md + ${fileCount} file(s) saved locally → ${tmpDir}`
@@ -174,12 +202,16 @@ export function dedupeRules(rules) {
 // Render the merged, provenance-tagged, budget-capped digest Claude receives.
 // First line format is stable (`🧬 Synthesized from N skills for "..."`) so it
 // never collides with the load_skill `# Skill loaded:` eval key.
-export function buildSynthesis({ query, sources, rules, budget = 4000 }) {
+export function buildSynthesis({ query, sources, rules, budget = 4000, remote = false }) {
   const q = scrubQuery(query);
   const header = `🧬 Synthesized from ${sources.length} skills for "${q}"`;
   const srcInline = sources.map((s) => `${s.slug} (${s.repo})`).join(' · ');
-  const srcPaths = sources.map((s) => `  ${s.slug} → ${s.tmpDir}`).join('\n');
-  const srcBlock = `Sources: ${srcInline} - full skills on disk:\n${srcPaths}`;
+  const srcPaths = remote
+    ? sources.map((s) => `  ${s.slug} → load_skill id \`${s.id}\``).join('\n')
+    : sources.map((s) => `  ${s.slug} → ${s.tmpDir}`).join('\n');
+  const srcBlock = remote
+    ? `Sources: ${srcInline} - load any in full with:\n${srcPaths}`
+    : `Sources: ${srcInline} - full skills on disk:\n${srcPaths}`;
   const kept = [];
   let used = 0;
   for (const r of rules || []) {
@@ -189,7 +221,9 @@ export function buildSynthesis({ query, sources, rules, budget = 4000 }) {
     used += line.length + 1;
   }
   const rulesBlock = `## Merged rules (provenance-tagged, deduped across sources)\n${kept.join('\n')}`;
-  const footer = '📖 Synthesize these into ONE playbook for the task; cite the rule sources. The full SKILL.md + files for each source are on disk above - read any for detail.';
+  const footer = remote
+    ? '📖 Synthesize these into ONE playbook for the task; cite the rule sources. Call load_skill with a source id above for its full SKILL.md + files.'
+    : '📖 Synthesize these into ONE playbook for the task; cite the rule sources. The full SKILL.md + files for each source are on disk above - read any for detail.';
   return [header, '', srcBlock, '', rulesBlock, '', footer].join('\n');
 }
 
@@ -204,10 +238,12 @@ export function buildSynthesis({ query, sources, rules, budget = 4000 }) {
 // large catalog search filter directory" and got an AutoCAD skill back.
 const QUERY_GUIDANCE = 'The task or domain in plain words - 2-6 words, ONE topic (e.g. "postgres row level security", "react component testing", "stripe webhooks"). The catalog matches EVERY word, so extra words return WORSE results, not more: no keyword soup, no synonym lists, no years or version numbers (those go in `context`). If the results look wrong, retry with FEWER words - never more.';
 
-const SERVER_INSTRUCTIONS = [
+// The local server writes the loaded skill to disk; the remote one cannot, so
+// the one sentence describing what load_skill hands back differs by mode.
+const serverInstructions = (remote) => [
   'Skillselion is a directory of thousands of community-vetted Claude Code skills - each a real SKILL.md plus bundled scripts/references, ranked by install count.',
   '',
-  'Recommended workflow - DEFAULT TO LOADING: before you write tests, frontend/UI, an API/DB layer, infra/Docker/CI, or framework-specific code (esp. a fast-moving stack like a payments/auth/cloud SDK), call load_skill FIRST - pass your task as `query` and your stack + constraints as `context` (required) - then follow it instead of reciting best practices from memory. It ranks candidates against your context and current repo, materializes the best match (SKILL.md + files into a temp folder, used like an installed skill), returns runner-up candidates you can switch to, and flags heavy dependencies. Verify the loaded skill against your project before trusting it.',
+  `Recommended workflow - DEFAULT TO LOADING: before you write tests, frontend/UI, an API/DB layer, infra/Docker/CI, or framework-specific code (esp. a fast-moving stack like a payments/auth/cloud SDK), call load_skill FIRST - pass your task as \`query\` and your stack + constraints as \`context\` (required) - then follow it instead of reciting best practices from memory. It ranks candidates against your context${remote ? '' : ' and current repo'}, ${remote ? 'returns the best match\'s SKILL.md inline (fetch its bundled scripts/refs with read_skill_file)' : 'materializes the best match (SKILL.md + files into a temp folder, used like an installed skill)'}, returns runner-up candidates you can switch to, and flags heavy dependencies. Verify the loaded skill against your project before trusting it.`,
   '',
   'Writing a good `query`: 2-6 words, ONE topic - "postgres row level security", "react component testing", "stripe webhooks". The catalog matches EVERY word, so a long keyword-soup query returns worse results, not more. Versions, years and constraints belong in `context` (ranking only), never in `query`. If the results look off, retry with FEWER words - never more.',
   '',
@@ -401,7 +437,7 @@ function recordDemand(sig) {
     fetch(`${API}/mcp/demand`, {
       method: 'POST',
       headers: { ...CLIENT_HEADERS, 'content-type': 'application/json' },
-      body: JSON.stringify({ ...safe, runId: RUN_ID, internal: INTERNAL, client: CLIENT_HEADERS['user-agent'] }),
+      body: JSON.stringify({ ...safe, runId: RUN_ID, internal: INTERNAL, client: REMOTE ? CLIENT_HEADERS['user-agent'].replace('skillselion-mcp/', 'skillselion-mcp-remote/') : CLIENT_HEADERS['user-agent'] }),
       signal: ctl.signal,
     }).catch(() => {}).finally(() => clearTimeout(t));
   } catch { /* never break the tool */ }
@@ -582,7 +618,10 @@ async function ghTree(repo, branch) {
  *  into a local temp folder, so the agent can load it like an installed skill -
  *  follow the SKILL.md and read/run the bundled files. Returns the SKILL.md text,
  *  the temp dir, and the manifest of bundled files. */
-async function loadFullSkill(repo, slug) {
+// Remote mode never touches disk: SKILL.md (and the one `want` file, for
+// read_skill_file) are fetched into memory and the rest are listed only, which
+// also spares the shared server's GitHub rate limit.
+async function loadFullSkill(repo, slug, { want = '' } = {}) {
   const esc = slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   for (const branch of ['main', 'master']) {
     const tree = await ghTree(repo, branch);
@@ -597,8 +636,8 @@ async function loadFullSkill(repo, slug) {
       .filter((n) => n.path === skillMdPath || n.path.startsWith(prefix))
       .filter((n) => (n.size ?? 0) < 1_000_000)
       .slice(0, 60);
-    const tmpDir = join(tmpdir(), 'skillselion', repo.replace(/[^\w.-]/g, '_'), slug.replace(/[^\w.-]/g, '_'));
-    mkdirSync(tmpDir, { recursive: true });
+    const tmpDir = REMOTE ? '' : join(tmpdir(), 'skillselion', repo.replace(/[^\w.-]/g, '_'), slug.replace(/[^\w.-]/g, '_'));
+    if (tmpDir) mkdirSync(tmpDir, { recursive: true });
     let skillMd = '';
     const manifest = [];
     const filesMeta = [];
@@ -606,19 +645,27 @@ async function loadFullSkill(repo, slug) {
       const rel = skillDir ? f.path.slice(prefix.length) : f.path;
       // Defense-in-depth (parity with loadSkillFromCatalog): never write outside tmpDir.
       if (rel.split('/').includes('..') || rel.startsWith('/')) continue;
+      const isMd = rel.toLowerCase() === 'skill.md';
+      if (REMOTE && !isMd && rel !== want) {
+        manifest.push(rel);
+        filesMeta.push({ rel, purpose: '' });
+        continue;
+      }
       try {
         const raw = await fetch(`https://raw.githubusercontent.com/${repo}/${branch}/${f.path}`, {
           headers: ghHeaders(),
         });
         if (!raw.ok) continue;
         const buf = Buffer.from(await raw.arrayBuffer());
-        const dest = join(tmpDir, rel);
-        mkdirSync(dirname(dest), { recursive: true });
-        writeFileSync(dest, buf);
-        if (rel.toLowerCase() === 'skill.md') skillMd = buf.toString('utf8');
+        if (tmpDir) {
+          const dest = join(tmpDir, rel);
+          mkdirSync(dirname(dest), { recursive: true });
+          writeFileSync(dest, buf);
+        }
+        if (isMd) skillMd = buf.toString('utf8');
         else {
           manifest.push(rel);
-          filesMeta.push({ rel, purpose: /\.md$/i.test(rel) ? filePurpose(rel, buf.toString('utf8')) : '' });
+          filesMeta.push({ rel, purpose: /\.md$/i.test(rel) ? filePurpose(rel, buf.toString('utf8')) : '', ...(REMOTE ? { contents: buf.toString('utf8') } : {}) });
         }
       } catch { /* skip this file */ }
     }
@@ -656,21 +703,23 @@ async function loadSkillFromCatalog(id) {
     const skillDir = mdEntry.path.includes('/') ? mdEntry.path.slice(0, mdEntry.path.lastIndexOf('/')) : '';
     const prefix = skillDir ? skillDir + '/' : '';
     const folder = String(id).replace(/[^\w.-]/g, '_').slice(0, 120);
-    const tmpDir = join(tmpdir(), 'skillselion', folder);
-    mkdirSync(tmpDir, { recursive: true });
+    const tmpDir = REMOTE ? '' : join(tmpdir(), 'skillselion', folder);
+    if (tmpDir) mkdirSync(tmpDir, { recursive: true });
     let skillMd = '';
     const manifest = [];
     const filesMeta = [];
     for (const f of files.slice(0, 100)) {
       const rel = skillDir && f.path.startsWith(prefix) ? f.path.slice(prefix.length) : f.path;
       try {
-        const dest = join(tmpDir, rel);
-        mkdirSync(dirname(dest), { recursive: true });
-        writeFileSync(dest, f.contents);
+        if (tmpDir) {
+          const dest = join(tmpDir, rel);
+          mkdirSync(dirname(dest), { recursive: true });
+          writeFileSync(dest, f.contents);
+        }
         if (rel.toLowerCase() === 'skill.md') skillMd = f.contents;
         else {
           manifest.push(rel);
-          filesMeta.push({ rel, purpose: /\.md$/i.test(rel) ? filePurpose(rel, f.contents) : '' });
+          filesMeta.push({ rel, purpose: /\.md$/i.test(rel) ? filePurpose(rel, f.contents) : '', ...(REMOTE ? { contents: f.contents } : {}) });
         }
       } catch { /* skip this file */ }
     }
@@ -733,12 +782,35 @@ export async function retrieveRankedSkills(query, context, repoCats) {
   return { adjusted };
 }
 
+// SKILL.md budget for a remote load. Local loads put the full file on disk; a
+// remote load carries it in the tool result, so allow a real skill through
+// whole while still capping a runaway one.
+const REMOTE_MD_BUDGET = Math.max(2000, numEnv('SK_REMOTE_MD_BUDGET', 24000));
+const REMOTE_FILE_BUDGET = Math.max(2000, numEnv('SK_REMOTE_FILE_BUDGET', 60000));
+
+// The remote load_skill result: card + SKILL.md inline + the bundled-file map.
+function remoteLoadText({ id, slug, repo, loaded, depNeeds = '', alts = '' }) {
+  const card = buildCard({
+    slug, repo, tmpDir: '', remote: true, oneLiner: skillOneLiner(loaded.skillMd),
+    fileCount: (loaded.files || []).length, depNeeds, alts,
+  });
+  const clip = clipSkillMd(loaded.skillMd, REMOTE_MD_BUDGET);
+  const body = clip.clipped
+    ? clip.text + `\n\n…(${clip.remaining} more section(s) - fetch the rest with read_skill_file, path "SKILL.md")`
+    : clip.text;
+  return `${card}\n\n## SKILL.md\n${body}\n\n${buildRemoteFilesNote(id, loaded.files || [])}`;
+}
+
 // ---- mode: MCP server -------------------------------------------------------
-async function runServer() {
+// One McpServer with every tool. stdio builds it once; http builds one per
+// request (stateless), so it must stay cheap and side-effect free.
+function buildServer() {
   // Append a local-skill gap-targeting line so even no-hook clients are told to
-  // prefer already-installed skills and use load_skill for the long tail.
-  const gl = (() => { try { return gapLine(localSkills()); } catch { return ''; } })();
-  const instructions = gl ? `${SERVER_INSTRUCTIONS}\n\n${gl}` : SERVER_INSTRUCTIONS;
+  // prefer already-installed skills and use load_skill for the long tail. The
+  // remote server's home dir says nothing about the caller, so it skips this.
+  const gl = REMOTE ? '' : (() => { try { return gapLine(localSkills()); } catch { return ''; } })();
+  const base = serverInstructions(REMOTE);
+  const instructions = gl ? `${base}\n\n${gl}` : base;
   const server = new McpServer({
     name: 'skillselion',
     version: VERSION,
@@ -757,6 +829,7 @@ async function runServer() {
       type: z.enum(['skill', 'mcp', 'marketplace']).optional().describe('Restrict to one listing type. Omit to search all.'),
       limit: z.number().int().min(1).max(25).optional().describe('Max results (default 8).'),
     },
+    { title: 'Search Skillselion', ...READ_ONLY },
     async ({ query, context, type, limit }) => {
       const n = limit ?? 8;
       // Skill results ALWAYS go through the same three-pool ranker as load_skill
@@ -805,9 +878,10 @@ async function runServer() {
       context: z.string().describe('REQUIRED. What you are actually doing + your stack + constraints/anti-patterns (e.g. "Next.js marketing page, no new deps, role-based locators"). Ranks candidates, fits them to your repo, and flags dependency mismatches. Be specific - this also keeps the load deliberate, not reflexive.'),
       id: z.string().optional().describe('An exact skill id from search_skillselion, e.g. "skill:owner/repo#slug".'),
     },
+    { title: 'Load a skill', ...READ_ONLY },
     async ({ id, query, context }) => {
       if (!context || !String(context).trim()) return { content: [{ type: 'text', text: 'load_skill needs `context` — tell me what you are doing + your stack + constraints (e.g. "Next.js marketing page, no new deps, role-based locators"). It makes the match accurate, fits the skill to your repo, and keeps the load deliberate.' }] };
-      const repoCats = (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
+      const repoCats = REMOTE ? [] : (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
       let row, alternates = [], topScore, picks, candidates;
       if (!id) {
         if (!query) return { content: [{ type: 'text', text: 'Provide a `query` (what you need) or an exact `id`. (`context` is also required.)' }] };
@@ -872,6 +946,11 @@ async function runServer() {
         // Try Skillselion's own SkillFile store first (reliable, any repo layout),
         // then fall back to fetching from GitHub by guessing conventional paths.
         const loaded = (await loadSkillFromCatalog(cid)) || (repo ? await loadFullSkill(repo, slug) : null);
+        if (loaded && REMOTE) {
+          return { content: [{ type: 'text', text: remoteLoadText({
+            id: cid, slug, repo, loaded, depNeeds: depNeedsStr(detectDeps(loaded.skillMd)), alts: altsStr(k),
+          }) }] };
+        }
         if (loaded) {
           // Lean by default: return the emoji TL;DR + the file map only. The full
           // SKILL.md is materialized to disk (not dumped into the visible output);
@@ -913,10 +992,11 @@ async function runServer() {
       query: z.string().describe('The topic/task to synthesize across skills (e.g. "playwright e2e testing best practices").'),
       context: z.string().describe('REQUIRED. What you are actually doing + your stack + constraints. Ranks candidates and fits them to your repo.'),
     },
+    { title: 'Synthesize skills', ...READ_ONLY },
     async ({ query, context }) => {
       if (!context || !String(context).trim()) return { content: [{ type: 'text', text: 'synthesize_skills needs `context` - tell me what you are doing + your stack + constraints.' }] };
       if (!query || !String(query).trim()) return { content: [{ type: 'text', text: 'synthesize_skills needs a `query` - the topic/task to synthesize across skills.' }] };
-      const repoCats = (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
+      const repoCats = REMOTE ? [] : (() => { try { return repoCategories(process.cwd()); } catch { return []; } })();
       const { adjusted } = await retrieveRankedSkills(query, context, repoCats);
       if (!adjusted.length) {
         recordDemand({ query, context, matched: false, source: 'synthesize' });
@@ -953,6 +1033,9 @@ async function runServer() {
         if (!sources.length) return { content: [{ type: 'text', text: `Could not materialize matching skills for "${query}". Try load_skill for a single skill, or search_skillselion.` }] };
         const only = sources[0];
         const loaded = only.loaded;
+        if (REMOTE) {
+          return { content: [{ type: 'text', text: `${remoteLoadText({ id: only.id, slug: only.slug, repo: only.repo, loaded })}\n\n(Only one skill matched - loaded it directly instead of synthesizing.)` }] };
+        }
         const card = buildCard({
           slug: only.slug, repo: only.repo, tmpDir: loaded.tmpDir,
           oneLiner: skillOneLiner(loaded.skillMd), fileCount: (loaded.files || []).length,
@@ -963,7 +1046,7 @@ async function runServer() {
 
       const merged = dedupeRules(taggedRules);
       recordDemand({ query, context, matched: true, source: 'synthesize', skillId: sources[0].id });
-      const out = buildSynthesis({ query, sources, rules: merged, budget: SYNTH_BUDGET });
+      const out = buildSynthesis({ query, sources, rules: merged, budget: SYNTH_BUDGET, remote: REMOTE });
       return { content: [{ type: 'text', text: out }] };
     },
   );
@@ -975,6 +1058,7 @@ async function runServer() {
       type: z.enum(['skill', 'mcp', 'marketplace']).optional().describe('Restrict to one listing type. Omit for all.'),
       limit: z.number().int().min(1).max(25).optional().describe('Max results (default 10).'),
     },
+    { title: 'Skillselion leaderboard', ...READ_ONLY },
     async ({ type, limit }) => {
       const n = limit ?? 10;
       const sort = type === 'mcp' || type === 'marketplace' ? 'stars' : undefined;
@@ -986,8 +1070,79 @@ async function runServer() {
     },
   );
 
-  await server.connect(new StdioServerTransport());
+  // Remote only: the local server already put every bundled file on disk.
+  if (REMOTE) {
+    server.tool(
+      'read_skill_file',
+      'Read one bundled file (script, reference, template) of a skill you loaded with load_skill - use it when the SKILL.md tells you to read or run a file it ships with. Pass the skill id and the file path exactly as load_skill listed it ("SKILL.md" returns the full SKILL.md).',
+      {
+        id: z.string().describe('The skill id load_skill returned, e.g. "skill:owner/repo#slug".'),
+        path: z.string().describe('The file path as listed under "Bundled files", relative to the skill folder (e.g. "scripts/check.py").'),
+      },
+      { title: 'Read a skill file', ...READ_ONLY },
+      async ({ id, path }) => {
+        const rel = String(path || '').replace(/^\.?\//, '');
+        if (!rel || rel.split('/').includes('..')) return { content: [{ type: 'text', text: `Invalid path "${path}".` }] };
+        const mm = String(id).match(/^skill:([^#]+)#(.+)$/);
+        const loaded = (await loadSkillFromCatalog(id)) || (mm && isLoadableRepo(mm[1]) ? await loadFullSkill(mm[1], mm[2], { want: rel }) : null);
+        if (!loaded) return { content: [{ type: 'text', text: `Couldn't load skill "${id}". Check the id with search_skillselion.` }] };
+        const text = rel.toLowerCase() === 'skill.md' ? loaded.skillMd : (loaded.files || []).find((f) => f.rel === rel)?.contents;
+        if (text == null) {
+          const known = (loaded.files || []).map((f) => f.rel).slice(0, 40).join(', ') || 'none';
+          return { content: [{ type: 'text', text: `"${rel}" is not a file of ${id}. Bundled files: ${known}.` }] };
+        }
+        const cut = text.length > REMOTE_FILE_BUDGET;
+        return { content: [{ type: 'text', text: `# ${id} › ${rel}\n\n${cut ? text.slice(0, REMOTE_FILE_BUDGET) + `\n\n…(clipped at ${REMOTE_FILE_BUDGET} of ${text.length} chars)` : text}` }] };
+      },
+    );
+  }
+
+  return server;
+}
+
+async function runServer() {
+  await buildServer().connect(new StdioServerTransport());
   console.error('skillselion-mcp running (stdio). Catalog: ' + SITE);
+}
+
+// ---- mode: remote MCP server (Streamable HTTP) -----------------------------
+// Stateless: a fresh server + transport per POST, no session ids, plain JSON
+// responses. Every tool is a read-only catalog lookup, so nothing needs to
+// survive between requests, and any replica can answer any call.
+async function runHttp() {
+  REMOTE = true;
+  const { createServer } = await import('node:http');
+  const { StreamableHTTPServerTransport } = await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
+  const port = Number(process.env.PORT) || 3000;
+  // Browser-based clients call cross-origin. Tools are public and read-only and
+  // there are no cookies, so a wildcard origin exposes nothing.
+  const CORS = {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, POST, DELETE, OPTIONS',
+    'access-control-allow-headers': 'content-type, accept, authorization, mcp-session-id, mcp-protocol-version, last-event-id',
+    'access-control-expose-headers': 'mcp-session-id, mcp-protocol-version',
+  };
+  const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+  createServer(async (req, res) => {
+    for (const [k, v] of Object.entries(CORS)) res.setHeader(k, v);
+    const { pathname } = new URL(req.url || '/', 'http://localhost');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    if (pathname === '/health') return json(res, 200, { ok: true, version: VERSION });
+    if (pathname === '/' && req.method === 'GET') { res.writeHead(302, { location: `${SITE}/skillselion-mcp` }); res.end(); return; }
+    if (pathname !== '/mcp') return json(res, 404, { error: 'not found - the MCP endpoint is POST /mcp' });
+    // Stateless server: no SSE stream to resume and no session to end.
+    if (req.method !== 'POST') return json(res, 405, { jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed.' }, id: null });
+    const server = buildServer();
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    res.on('close', () => { transport.close(); server.close(); });
+    try {
+      await server.connect(transport);
+      await transport.handleRequest(req, res);
+    } catch (e) {
+      console.error('mcp request failed:', e);
+      if (!res.headersSent) json(res, 500, { jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
+    }
+  }).listen(port, () => console.error(`skillselion-mcp running (http) on :${port}/mcp. Catalog: ${SITE}`));
 }
 
 // ---- skill packs (priming presets) ------------------------------------------
@@ -1396,5 +1551,6 @@ if (isEntrypoint()) {
   const cmd = process.argv[2];
   if (cmd === 'setup') await runSetup();
   else if (cmd === 'session-context') await printSessionContext();
+  else if (cmd === 'http') await runHttp();
   else await runServer();
 }
