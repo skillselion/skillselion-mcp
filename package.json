@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "start": "node index.js",
-    "test": "node test/smoke.mjs && node test/response-format.mjs && node test/synthesis.mjs",
+    "test": "node test/smoke.mjs && node test/http.mjs && node test/response-format.mjs && node test/synthesis.mjs",
     "test:live": "node test/verbose.mjs && node test/relevance.mjs && node test/live.mjs && node test/synthesis.mjs --live"
   },
   "keywords": [
