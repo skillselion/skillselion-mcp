@@ -132,7 +132,7 @@ export function buildCard({ slug, repo, tmpDir, oneLiner, fileCount = 0, depNeed
       : `📂 SKILL.md below`);
     if (depNeeds) tl.push(`⚠️ Needs: ${depNeeds} - check against your project first.`);
     if (alts) tl.push(`🔀 Or switch to: ${alts}`);
-    tl.push(`📖 Follow the SKILL.md below - that is the full skill.`);
+    tl.push(`📖 Community-authored SKILL.md below - review it before applying it to your project.`);
     return head + tl.join('\n');
   }
   if (!tmpDir) tl.push(`📂 SKILL.md shown below (bundled files unavailable this time).`);
@@ -238,6 +238,24 @@ export function buildSynthesis({ query, sources, rules, budget = 4000, remote = 
 // large catalog search filter directory" and got an AutoCAD skill back.
 const QUERY_GUIDANCE = 'The task or domain in plain words - 2-6 words, ONE topic (e.g. "postgres row level security", "react component testing", "stripe webhooks"). The catalog matches EVERY word, so extra words return WORSE results, not more: no keyword soup, no synonym lists, no years or version numbers (those go in `context`). If the results look wrong, retry with FEWER words - never more.';
 
+// Remote (Claude Connectors Directory) wording. Directory review rejects tool
+// text that tells Claude how to behave or when to call tools, so remote mode
+// states only what each tool does and returns. The local npm server keeps its
+// own wording, which the user opted into by installing it.
+const REMOTE_DESC = {
+  search: 'Search the Skillselion catalog of community Claude Code agent skills, MCP servers and plugin marketplaces, ranked by installs and GitHub stars. Returns matching listings with a summary, install command and catalog link. Optional `type` filter and result `limit`.',
+  load: 'Fetch one community skill from the Skillselion catalog: finds the best match for a task `query` (or takes an exact skill `id`) and returns its SKILL.md text, the list of its bundled files, and up to two alternative matches. `context` (task, stack, constraints) is used only to rank candidates and is not stored.',
+  synth: 'Fetch the top matching community skills for a topic (up to 5, one per repository) and return their rule lines merged into one deduplicated digest, each line tagged with its source skill.',
+  readFile: 'Return the contents of one bundled file (script, reference or template) of a skill returned by load_skill. Pass the skill id and the file path as listed ("SKILL.md" returns the full SKILL.md).',
+};
+const REMOTE_INSTRUCTIONS = [
+  'Skillselion is a catalog of community Claude Code agent skills (each a SKILL.md plus bundled scripts and references), MCP servers and plugin marketplaces, ranked by installs and GitHub stars.',
+  '',
+  'Tools: search_skillselion lists catalog entries; top_skillselion lists the most-installed entries; load_skill returns one skill\'s SKILL.md and its file list; read_skill_file returns one bundled file; synthesize_skills merges rule lines from several matching skills.',
+  '',
+  'Queries work best as 2-6 words on one topic (e.g. "postgres row level security"): the catalog matches every word, so long queries return fewer results. Put versions and constraints in `context`, which only affects ranking. Skills are community-authored; review a skill before applying it.',
+].join('\n');
+
 // The local server writes the loaded skill to disk; the remote one cannot, so
 // the one sentence describing what load_skill hands back differs by mode.
 const serverInstructions = (remote) => [
@@ -310,7 +328,7 @@ function fmt(row) {
   if (desc) lines.push(desc.length > 220 ? desc.slice(0, 217) + '...' : desc);
   const install = installHint(row);
   if (install) lines.push('install: `' + install + '`');
-  if (row.type === 'skill') lines.push('load now: call `load_skill` with id `' + row.id + '`');
+  if (row.type === 'skill') lines.push(REMOTE ? 'skill id: `' + row.id + '`' : 'load now: call `load_skill` with id `' + row.id + '`');
   lines.push(`details: ${listingUrl(row)}`);
   return lines.join('\n');
 }
@@ -427,7 +445,9 @@ function recordDemand(sig) {
   // signal entirely), and never transmit the caller's `context` (their task,
   // stack and constraints). Only the query, the match outcome, the picked
   // skill id, the candidate catalog ids and the random RUN_ID leave the machine.
-  if (process.env.DO_NOT_TRACK || process.env.SK_NO_DEMAND) return;
+  // The remote connector logs nothing: Directory policy allows collecting only
+  // what a tool needs to work, and the demand signal is analytics, not function.
+  if (REMOTE || process.env.DO_NOT_TRACK || process.env.SK_NO_DEMAND) return;
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 2500);
@@ -809,7 +829,7 @@ function buildServer() {
   // prefer already-installed skills and use load_skill for the long tail. The
   // remote server's home dir says nothing about the caller, so it skips this.
   const gl = REMOTE ? '' : (() => { try { return gapLine(localSkills()); } catch { return ''; } })();
-  const base = serverInstructions(REMOTE);
+  const base = REMOTE ? REMOTE_INSTRUCTIONS : serverInstructions(REMOTE);
   const instructions = gl ? `${base}\n\n${gl}` : base;
   const server = new McpServer({
     name: 'skillselion',
@@ -822,7 +842,7 @@ function buildServer() {
 
   server.tool(
     'search_skillselion',
-    'Search Skillselion, a curated directory of Claude Code agent skills, MCP servers and plugin marketplaces, ranked by real community signal (installs + GitHub stars). Use to browse trusted skills/MCPs/marketplaces for the task at hand (e.g. "postgres", "code review", "playwright"). Skill searches blend keyword + semantic ranking (same matcher as load_skill). To actually USE a skill, call load_skill (with an id from here, or directly with a query - it searches for you).',
+    REMOTE ? REMOTE_DESC.search : 'Search Skillselion, a curated directory of Claude Code agent skills, MCP servers and plugin marketplaces, ranked by real community signal (installs + GitHub stars). Use to browse trusted skills/MCPs/marketplaces for the task at hand (e.g. "postgres", "code review", "playwright"). Skill searches blend keyword + semantic ranking (same matcher as load_skill). To actually USE a skill, call load_skill (with an id from here, or directly with a query - it searches for you).',
     {
       query: z.string().describe(QUERY_GUIDANCE),
       context: z.string().optional().describe('Optional: your stack + constraints (e.g. "Next.js 15 App Router, TypeScript, no new deps"). Used for RANKING only, never for keyword matching - so versions, years and situational detail belong here, not in `query`.'),
@@ -872,7 +892,7 @@ function buildServer() {
 
   server.tool(
     'load_skill',
-    'Load a community-vetted skill into your context on demand - like installing it mid-task. Reach for this when a task is in a domain a skill likely covers (tests, frontend/UI, an API/DB, infra, a named framework) and a proven recipe would beat improvising - most valuable in territory you are less sure of, or fast-moving stacks where your memory may be stale. You MUST pass `context` (your task + stack + constraints): it ranks candidates, fits them to your current repo, flags dependency mismatches, and keeps the load deliberate. Returns the best match (real SKILL.md + bundled scripts/refs materialized to a temp folder, used like an installed skill) PLUS the next-best candidates so you can switch. Always verify the loaded skill against your project before trusting it. For broad "current best practices across the field" tasks that span several skills, use synthesize_skills instead.',
+    REMOTE ? REMOTE_DESC.load : 'Load a community-vetted skill into your context on demand - like installing it mid-task. Reach for this when a task is in a domain a skill likely covers (tests, frontend/UI, an API/DB, infra, a named framework) and a proven recipe would beat improvising - most valuable in territory you are less sure of, or fast-moving stacks where your memory may be stale. You MUST pass `context` (your task + stack + constraints): it ranks candidates, fits them to your current repo, flags dependency mismatches, and keeps the load deliberate. Returns the best match (real SKILL.md + bundled scripts/refs materialized to a temp folder, used like an installed skill) PLUS the next-best candidates so you can switch. Always verify the loaded skill against your project before trusting it. For broad "current best practices across the field" tasks that span several skills, use synthesize_skills instead.',
     {
       query: z.string().optional().describe('What you need, in plain words - 2-6 words, ONE topic (e.g. "playwright e2e tests"). The catalog matches EVERY word, so extra words return WORSE results, not more: keep versions, years, stack detail and constraints in `context`, never here. Required unless you pass an exact id.'),
       context: z.string().describe('REQUIRED. What you are actually doing + your stack + constraints/anti-patterns (e.g. "Next.js marketing page, no new deps, role-based locators"). Ranks candidates, fits them to your repo, and flags dependency mismatches. Be specific - this also keeps the load deliberate, not reflexive.'),
@@ -987,7 +1007,7 @@ function buildServer() {
 
   server.tool(
     'synthesize_skills',
-    'Pull the BEST rules across the top matching community skills and merge them into one cross-source playbook - use for broad "how should I approach X / current best practices" tasks that span multiple skills, or when you want the field\'s combined guidance rather than one skill\'s. For a single specific skill (and its bundled scripts/files), use load_skill instead. Pass your task as `query` and your stack + constraints as `context` (required). Returns a deduped, provenance-tagged rule digest plus each source skill materialized on disk.',
+    REMOTE ? REMOTE_DESC.synth : 'Pull the BEST rules across the top matching community skills and merge them into one cross-source playbook - use for broad "how should I approach X / current best practices" tasks that span multiple skills, or when you want the field\'s combined guidance rather than one skill\'s. For a single specific skill (and its bundled scripts/files), use load_skill instead. Pass your task as `query` and your stack + constraints as `context` (required). Returns a deduped, provenance-tagged rule digest plus each source skill materialized on disk.',
     {
       query: z.string().describe('The topic/task to synthesize across skills (e.g. "playwright e2e testing best practices").'),
       context: z.string().describe('REQUIRED. What you are actually doing + your stack + constraints. Ranks candidates and fits them to your repo.'),
@@ -1074,7 +1094,7 @@ function buildServer() {
   if (REMOTE) {
     server.tool(
       'read_skill_file',
-      'Read one bundled file (script, reference, template) of a skill you loaded with load_skill - use it when the SKILL.md tells you to read or run a file it ships with. Pass the skill id and the file path exactly as load_skill listed it ("SKILL.md" returns the full SKILL.md).',
+      REMOTE_DESC.readFile,
       {
         id: z.string().describe('The skill id load_skill returned, e.g. "skill:owner/repo#slug".'),
         path: z.string().describe('The file path as listed under "Bundled files", relative to the skill folder (e.g. "scripts/check.py").'),
