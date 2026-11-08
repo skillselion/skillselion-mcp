@@ -34,7 +34,11 @@ try {
   assert.match(client.getInstructions() || '', /read_skill_file/, 'remote instructions must point at read_skill_file');
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map((t) => t.name).sort(), EXPECTED);
+  // Directory review rejects tool text that steers Claude's behavior.
+  const STEER = /\b(MUST|FIRST|DEFAULT TO|always|instead of)\b/;
+  assert.doesNotMatch(client.getInstructions() || '', STEER, 'remote instructions must not steer Claude');
   for (const t of tools) {
+    assert.doesNotMatch(t.description || '', STEER, `${t.name}: description must not steer Claude`);
     assert.equal(t.annotations?.readOnlyHint, true, `${t.name}: readOnlyHint`);
     assert.equal(t.annotations?.destructiveHint, false, `${t.name}: destructiveHint`);
     assert.ok(t.annotations?.title, `${t.name}: title`);
