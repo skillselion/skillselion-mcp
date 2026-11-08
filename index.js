@@ -1142,12 +1142,23 @@ async function runHttp() {
     'access-control-allow-headers': 'content-type, accept, authorization, mcp-session-id, mcp-protocol-version, last-event-id',
     'access-control-expose-headers': 'mcp-session-id, mcp-protocol-version',
   };
+  let iconBytes = null;
   const json = (res, status, body) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
   createServer(async (req, res) => {
     for (const [k, v] of Object.entries(CORS)) res.setHeader(k, v);
     const { pathname } = new URL(req.url || '/', 'http://localhost');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
     if (pathname === '/health') return json(res, 200, { ok: true, version: VERSION });
+    // Claude shows a connector's favicon from its server URL. Serve the brand
+    // icon bytes (not a redirect, which some favicon fetchers do not follow).
+    if ((pathname === '/favicon.ico' || pathname === '/icon.png') && req.method === 'GET') {
+      try {
+        iconBytes ??= Buffer.from(await (await fetch(SERVER_ICON)).arrayBuffer());
+        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' });
+        res.end(iconBytes);
+      } catch { res.writeHead(302, { location: SERVER_ICON }); res.end(); }
+      return;
+    }
     if (pathname === '/' && req.method === 'GET') { res.writeHead(302, { location: `${SITE}/skillselion-mcp` }); res.end(); return; }
     if (pathname !== '/mcp') return json(res, 404, { error: 'not found - the MCP endpoint is POST /mcp' });
     // Stateless server: no SSE stream to resume and no session to end.
