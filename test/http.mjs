@@ -27,6 +27,8 @@ try {
   assert.equal(pre.status, 204);
   assert.equal(pre.headers.get('access-control-allow-origin'), '*');
   assert.equal((await fetch(`${base}/mcp`)).status, 405, 'GET /mcp must be 405 on a stateless server');
+  const fav = await fetch(`${base}/favicon.ico`, { redirect: 'manual' });
+  assert.ok([200, 302].includes(fav.status), 'favicon must be served (or redirect when offline)');
 
   const client = new Client({ name: 'http-smoke', version: '0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
