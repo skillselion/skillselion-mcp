@@ -44,6 +44,14 @@ claude mcp add skillselion --scope user -- npx -y skillselion-mcp
 
 No build step, no auth, no API key. One ~30 KB file via `npx`.
 
+**Remote (no install)** - for claude.ai, Claude mobile, ChatGPT, or any client that takes a remote MCP URL, add a custom connector:
+
+```text
+https://mcp.skillselion.com/mcp
+```
+
+Same tools, no auth. A remote server can't write to your disk, so `load_skill` returns the `SKILL.md` inline and `read_skill_file` fetches its bundled scripts/references on demand.
+
 Want it fully automatic? `npx -y skillselion-mcp setup` registers the server **and** installs a session hook so your agent loads the right skill the moment a task matches - see [Skill autopilot](#-skill-autopilot).
 
 ## 🔧 Tools
@@ -54,6 +62,7 @@ Want it fully automatic? `npx -y skillselion-mcp setup` registers the server **a
 | 🧬 **`synthesize_skills`** | The cross-source playbook: merges the key rules of the top ~5 matching skills into one deduped, provenance-tagged digest - the field's consensus, not one author's take. |
 | 🔍 **`search_skillselion`** | Search the catalog by keyword or task; filter by `skill` / `mcp` / `marketplace`. |
 | 🏆 **`top_skillselion`** | The leaderboard - the most-installed skills and top-starred MCP servers right now. |
+| 📄 **`read_skill_file`** | Remote connector only: fetch one bundled file of a loaded skill (local installs already have them on disk). |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/skillselion/skillselion-mcp/master/assets/shot-honest.png" alt="Claude's own honest take after using the MCP: consensus across 5 community skills is the part I can't fake" width="92%">
